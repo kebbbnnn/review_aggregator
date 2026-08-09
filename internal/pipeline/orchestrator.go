@@ -65,10 +65,10 @@ func (o *Orchestrator) Run(ctx context.Context, limit int) (*SyncResult, error) 
 	for _, movie := range movies {
 		movieID := discovery.FormatTMDBID(movie.TMDBID)
 
-		// Freshness check (skip if updated within 24h)
+		// Freshness check (skip if updated within 24h AND already has a valid summary)
 		if existing, found, _ := o.store.GetMovie(ctx, movieID); found {
-			if time.Since(existing.LastUpdated) < 24*time.Hour {
-				log.Printf("[PIPELINE] Skipping '%s' (updated recently)", movie.Title)
+			if time.Since(existing.LastUpdated) < 24*time.Hour && existing.Summary != nil {
+				log.Printf("[PIPELINE] Skipping '%s' (fresh & has summary)", movie.Title)
 				result.MoviesSkipped++
 				continue
 			}
@@ -95,7 +95,7 @@ func (o *Orchestrator) Run(ctx context.Context, limit int) (*SyncResult, error) 
 
 		// Generate summary via LLM
 		var summary *llm.SummaryResponse
-		if len(cleanReviews) > 0 && o.llmClient != nil {
+		if o.llmClient != nil && (len(cleanReviews) > 0 || movie.Overview != "") {
 			sum, err := o.llmClient.SummarizeMovie(ctx, movie.Title, movie.Overview, cleanReviews)
 			if err != nil {
 				errMsg := fmt.Sprintf("LLM error for '%s': %v", movie.Title, err)

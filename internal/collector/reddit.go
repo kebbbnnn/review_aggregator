@@ -107,16 +107,18 @@ func (r *RedditCollector) getAccessToken(ctx context.Context) (string, error) {
 }
 
 func (r *RedditCollector) FetchReviews(ctx context.Context, movieTitle string) ([]Review, error) {
-	token, _ := r.getAccessToken(ctx)
-
-	var reqURL string
-	query := fmt.Sprintf(`title:"%s" (review OR opinion OR thoughts)`, movieTitle)
-
-	if token != "" {
-		reqURL = fmt.Sprintf("https://oauth.reddit.com/r/movies/search?q=%s&restrict_sr=on&sort=relevance&limit=15", url.QueryEscape(query))
-	} else {
-		reqURL = fmt.Sprintf("https://www.reddit.com/r/movies/search.json?q=%s&restrict_sr=on&sort=relevance&limit=15", url.QueryEscape(query))
+	if r.clientID == "" || r.clientSecret == "" {
+		// Reddit blocks unauthenticated search requests (403). Skip cleanly when keys are unconfigured.
+		return nil, nil
 	}
+
+	token, err := r.getAccessToken(ctx)
+	if err != nil || token == "" {
+		return nil, nil
+	}
+
+	query := fmt.Sprintf(`title:"%s" (review OR opinion OR thoughts)`, movieTitle)
+	reqURL := fmt.Sprintf("https://oauth.reddit.com/r/movies/search?q=%s&restrict_sr=on&sort=relevance&limit=15", url.QueryEscape(query))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {

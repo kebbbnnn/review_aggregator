@@ -17,7 +17,7 @@ type Processor struct {
 
 func NewProcessor(minWordCount, maxReviews int) *Processor {
 	if minWordCount <= 0 {
-		minWordCount = 10
+		minWordCount = 3
 	}
 	if maxReviews <= 0 {
 		maxReviews = 30

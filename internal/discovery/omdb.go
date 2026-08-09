@@ -59,6 +59,9 @@ func (c *OMDBClient) EnrichScores(ctx context.Context, movie *Movie) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusUnauthorized {
+			return fmt.Errorf("OMDb API key unactivated (please click activation link sent to your email)")
+		}
 		return fmt.Errorf("OMDb API returned status %d", resp.StatusCode)
 	}
 

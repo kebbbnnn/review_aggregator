@@ -123,12 +123,16 @@ func (c *DefaultClient) buildPrompt(title, overview string, reviews []collector.
 	if overview != "" {
 		builder.WriteString(fmt.Sprintf("Overview: %s\n", overview))
 	}
-	builder.WriteString("\nCollected Audience Reviews:\n")
 
-	for i, r := range reviews {
-		builder.WriteString(fmt.Sprintf("\n--- Review #%d (Source: %s, Score: %d) ---\n", i+1, r.Source, r.Score))
-		builder.WriteString(r.Content)
-		builder.WriteString("\n")
+	if len(reviews) > 0 {
+		builder.WriteString("\nCollected Audience Reviews:\n")
+		for i, r := range reviews {
+			builder.WriteString(fmt.Sprintf("\n--- Review #%d (Source: %s, Score: %d) ---\n", i+1, r.Source, r.Score))
+			builder.WriteString(r.Content)
+			builder.WriteString("\n")
+		}
+	} else {
+		builder.WriteString("\nNote: No audience reviews collected yet (unreleased or newly announced movie). Please generate a summary based on the overview/synopsis.\n")
 	}
 
 	builder.WriteString(`
