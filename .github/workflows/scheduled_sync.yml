@@ -1,0 +1,35 @@
+name: Scheduled Movie Review Sync
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  trigger-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Movie Aggregator Sync Endpoint
+        run: |
+          if [ -z "${{ secrets.RENDER_SERVICE_URL }}" ]; then
+            echo "Error: RENDER_SERVICE_URL secret is not configured."
+            exit 1
+          fi
+
+          echo "Triggering pipeline sync..."
+          response=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST "${{ secrets.RENDER_SERVICE_URL }}/api/v1/jobs/sync" \
+            -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json")
+
+          http_status=$(echo "$response" | grep "HTTP_STATUS" | cut -d':' -f2)
+          body=$(echo "$response" | sed '/HTTP_STATUS/d')
+
+          echo "Response Body:"
+          echo "$body"
+
+          if [ "$http_status" -ne 200 ]; then
+            echo "Sync trigger failed with status code: $http_status"
+            exit 1
+          fi
+
+          echo "Sync trigger completed successfully!"
