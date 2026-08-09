@@ -4,7 +4,7 @@
 
 # Binaries & Build Output
 bin/
-server
+/server
 
 # Service Account Keys
 *.json
