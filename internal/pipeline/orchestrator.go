@@ -65,8 +65,10 @@ func (o *Orchestrator) Run(ctx context.Context, limit int) (*SyncResult, error) 
 	for _, movie := range movies {
 		movieID := discovery.FormatTMDBID(movie.TMDBID)
 
+		var existingDoc *store.MovieDocument
 		// Freshness check (skip if updated within 24h AND already has a valid summary)
 		if existing, found, _ := o.store.GetMovie(ctx, movieID); found {
+			existingDoc = existing
 			if time.Since(existing.LastUpdated) < 24*time.Hour && existing.Summary != nil {
 				log.Printf("[PIPELINE] Skipping '%s' (fresh & has summary)", movie.Title)
 				result.MoviesSkipped++
@@ -83,26 +85,35 @@ func (o *Orchestrator) Run(ctx context.Context, limit int) (*SyncResult, error) 
 			}
 		}
 
-		// Concurrently fetch reviews across all collectors
-		rawReviews := o.collectReviewsConcurrently(ctx, movie.Title)
-
-		if len(rawReviews) == 0 {
-			log.Printf("[WARN] No reviews found for '%s'", movie.Title)
-		}
-
-		// Preprocess and deduplicate
-		cleanReviews := o.processor.CleanAndDeduplicate(rawReviews)
-
-		// Generate summary via LLM
 		var summary *llm.SummaryResponse
-		if o.llmClient != nil && (len(cleanReviews) > 0 || movie.Overview != "") {
-			sum, err := o.llmClient.SummarizeMovie(ctx, movie.Title, movie.Overview, cleanReviews)
-			if err != nil {
-				errMsg := fmt.Sprintf("LLM error for '%s': %v", movie.Title, err)
-				log.Println("[ERROR]", errMsg)
-				result.Errors = append(result.Errors, errMsg)
-			} else {
-				summary = sum
+		var reviewCount int
+
+		if existingDoc != nil && existingDoc.Summary != nil {
+			log.Printf("[PIPELINE] Existing summary found for '%s', skipping new summary generation", movie.Title)
+			summary = existingDoc.Summary
+			reviewCount = existingDoc.ReviewCountAnalyzed
+		} else {
+			// Concurrently fetch reviews across all collectors
+			rawReviews := o.collectReviewsConcurrently(ctx, movie.Title)
+
+			if len(rawReviews) == 0 {
+				log.Printf("[WARN] No reviews found for '%s'", movie.Title)
+			}
+
+			// Preprocess and deduplicate
+			cleanReviews := o.processor.CleanAndDeduplicate(rawReviews)
+			reviewCount = len(cleanReviews)
+
+			// Generate summary via LLM
+			if o.llmClient != nil && (len(cleanReviews) > 0 || movie.Overview != "") {
+				sum, err := o.llmClient.SummarizeMovie(ctx, movie.Title, movie.Overview, cleanReviews)
+				if err != nil {
+					errMsg := fmt.Sprintf("LLM error for '%s': %v", movie.Title, err)
+					log.Println("[ERROR]", errMsg)
+					result.Errors = append(result.Errors, errMsg)
+				} else {
+					summary = sum
+				}
 			}
 		}
 
@@ -117,7 +128,7 @@ func (o *Orchestrator) Run(ctx context.Context, limit int) (*SyncResult, error) 
 			Genres:              movie.Genres,
 			Scores:              movie.Scores,
 			Summary:             summary,
-			ReviewCountAnalyzed: len(cleanReviews),
+			ReviewCountAnalyzed: reviewCount,
 			LastUpdated:         time.Now(),
 		}
 
