@@ -24,3 +24,8 @@ type Movie struct {
 type Discoverer interface {
 	DiscoverRecentMovies(ctx context.Context, limit int) ([]Movie, error)
 }
+
+type Searcher interface {
+	SearchMovies(ctx context.Context, query string, limit int) ([]Movie, error)
+}
+

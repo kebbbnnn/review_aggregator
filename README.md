@@ -70,7 +70,8 @@ Designed for serverless execution on **Render (Free Tier)** triggered by a perio
 ```text
 .
 ├── cmd/
-│   └── server/          # Main entrypoint & HTTP server (/healthz, /api/v1/jobs/sync)
+│   └── server/          # Main entrypoint & HTTP server (/healthz, /api/v1/jobs/sync, /api/v1/movies/search)
+
 ├── internal/
 │   ├── config/          # Environment variables & .env loader
 │   ├── discovery/       # TMDB & OMDb API integrations
@@ -153,6 +154,12 @@ cp .env.example .env
    curl -X POST http://localhost:8080/api/v1/jobs/sync \
      -H "X-Cron-Secret: super_secret_cron_token_123"
    ```
+
+6. **Query movies by title**:
+   ```bash
+   curl "http://localhost:8080/api/v1/movies/search?q=inception"
+   ```
+
 
 ---
 
