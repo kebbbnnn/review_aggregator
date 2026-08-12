@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"review_aggregator/internal/collector"
 )
+
+const maxRetries = 3
 
 type Client interface {
 	SummarizeMovie(ctx context.Context, title, overview string, reviews []collector.Review) (*SummaryResponse, error)
@@ -74,46 +77,81 @@ func (c *DefaultClient) SummarizeMovie(ctx context.Context, title, overview stri
 	}
 
 	url := fmt.Sprintf("%s/chat/completions", c.baseURL)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonBytes))
-	if err != nil {
-		return nil, fmt.Errorf("creating LLM request: %w", err)
-	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("executing LLM request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		var errResp openAIChatResponse
-		_ = json.NewDecoder(resp.Body).Decode(&errResp)
-		if errResp.Error != nil {
-			return nil, fmt.Errorf("LLM API error (%d): %s", resp.StatusCode, errResp.Error.Message)
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second // 1s, 2s, 4s
+			log.Printf("[LLM] Retry %d/%d for '%s' after %v", attempt, maxRetries, title, backoff)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
 		}
-		return nil, fmt.Errorf("LLM API returned status %d", resp.StatusCode)
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonBytes))
+		if err != nil {
+			return nil, fmt.Errorf("creating LLM request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("executing LLM request: %w", err)
+			continue // network error — retry
+		}
+
+		if isRetryableStatus(resp.StatusCode) {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("LLM API returned status %d", resp.StatusCode)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			var errResp openAIChatResponse
+			_ = json.NewDecoder(resp.Body).Decode(&errResp)
+			resp.Body.Close()
+			if errResp.Error != nil {
+				return nil, fmt.Errorf("LLM API error (%d): %s", resp.StatusCode, errResp.Error.Message)
+			}
+			return nil, fmt.Errorf("LLM API returned status %d", resp.StatusCode)
+		}
+
+		var chatResp openAIChatResponse
+		if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("decoding LLM response: %w", err)
+		}
+		resp.Body.Close()
+
+		if len(chatResp.Choices) == 0 {
+			return nil, fmt.Errorf("LLM returned empty choices")
+		}
+
+		content := chatResp.Choices[0].Message.Content
+
+		var summary SummaryResponse
+		if err := json.Unmarshal([]byte(content), &summary); err != nil {
+			return nil, fmt.Errorf("parsing LLM JSON response: %w (raw response: %s)", err, content)
+		}
+
+		return &summary, nil
 	}
 
-	var chatResp openAIChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
-		return nil, fmt.Errorf("decoding LLM response: %w", err)
+	return nil, fmt.Errorf("LLM request failed after %d retries: %w", maxRetries, lastErr)
+}
+
+func isRetryableStatus(code int) bool {
+	switch code {
+	case http.StatusTooManyRequests,     // 429
+		http.StatusBadGateway,           // 502
+		http.StatusServiceUnavailable,   // 503
+		http.StatusGatewayTimeout:       // 504
+		return true
 	}
-
-	if len(chatResp.Choices) == 0 {
-		return nil, fmt.Errorf("LLM returned empty choices")
-	}
-
-	content := chatResp.Choices[0].Message.Content
-
-	var summary SummaryResponse
-	if err := json.Unmarshal([]byte(content), &summary); err != nil {
-		return nil, fmt.Errorf("parsing LLM JSON response: %w (raw response: %s)", err, content)
-	}
-
-	return &summary, nil
+	return false
 }
 
 func (c *DefaultClient) buildPrompt(title, overview string, reviews []collector.Review) string {

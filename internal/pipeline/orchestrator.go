@@ -111,6 +111,7 @@ func (o *Orchestrator) Run(ctx context.Context, limit int) (*SyncResult, error) 
 					errMsg := fmt.Sprintf("LLM error for '%s': %v", movie.Title, err)
 					log.Println("[ERROR]", errMsg)
 					result.Errors = append(result.Errors, errMsg)
+					continue
 				} else {
 					summary = sum
 				}
