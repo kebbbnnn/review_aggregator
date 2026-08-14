@@ -187,6 +187,128 @@ func (s *D1Store) SaveMovie(ctx context.Context, doc *MovieDocument) error {
 	return nil
 }
 
+func (s *D1Store) SaveMovieBatch(ctx context.Context, docs []*MovieDocument) error {
+	if len(docs) == 0 {
+		return nil
+	}
+
+	if s.httpClient == nil {
+		log.Printf("[MOCK STORE] SaveMovieBatch: %d movies", len(docs))
+		return nil
+	}
+
+	now := time.Now().UTC()
+	lastUpdatedStr := now.Format(time.RFC3339)
+
+	var batch []d1QueryItem
+
+	upsertSQL := `INSERT INTO movies (
+		id, tmdb_id, imdb_id, title, release_date, poster_url, overview,
+		imdb_score, rotten_tomatoes, overall_sentiment, audience_consensus, recommendation,
+		review_count, last_updated
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		tmdb_id=excluded.tmdb_id,
+		imdb_id=excluded.imdb_id,
+		title=excluded.title,
+		release_date=excluded.release_date,
+		poster_url=excluded.poster_url,
+		overview=excluded.overview,
+		imdb_score=excluded.imdb_score,
+		rotten_tomatoes=excluded.rotten_tomatoes,
+		overall_sentiment=excluded.overall_sentiment,
+		audience_consensus=excluded.audience_consensus,
+		recommendation=excluded.recommendation,
+		review_count=excluded.review_count,
+		last_updated=excluded.last_updated;`
+
+	for _, doc := range docs {
+		doc.LastUpdated = now
+
+		releaseDateStr := ""
+		if !doc.ReleaseDate.IsZero() {
+			releaseDateStr = doc.ReleaseDate.UTC().Format(time.RFC3339)
+		}
+
+		// Delete existing genres
+		batch = append(batch, d1QueryItem{
+			SQL:    "DELETE FROM movie_genres WHERE movie_id = ?;",
+			Params: []any{doc.ID},
+		})
+
+		// Upsert movie
+		batch = append(batch, d1QueryItem{
+			SQL: upsertSQL,
+			Params: []any{
+				doc.ID,
+				doc.TMDBID,
+				doc.IMDbID,
+				doc.Title,
+				releaseDateStr,
+				doc.PosterURL,
+				doc.Overview,
+				doc.IMDbScore,
+				doc.RottenTomatoes,
+				doc.OverallSentiment,
+				doc.AudienceConsensus,
+				doc.Recommendation,
+				doc.ReviewCountAnalyzed,
+				lastUpdatedStr,
+			},
+		})
+
+		// Insert genres
+		for _, genre := range doc.Genres {
+			if genre == "" {
+				continue
+			}
+			batch = append(batch, d1QueryItem{
+				SQL:    "INSERT OR IGNORE INTO movie_genres (movie_id, genre) VALUES (?, ?);",
+				Params: []any{doc.ID, genre},
+			})
+		}
+	}
+
+	chunkSize := 80
+	for i := 0; i < len(batch); i += chunkSize {
+		end := i + chunkSize
+		if end > len(batch) {
+			end = len(batch)
+		}
+		subBatch := batch[i:end]
+		_, err := s.executeBatch(ctx, subBatch)
+		if err != nil {
+			return fmt.Errorf("saving movie batch to D1: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (s *D1Store) MovieExists(ctx context.Context, id string) (bool, error) {
+	if s.httpClient == nil {
+		return false, nil
+	}
+
+	batch := []d1QueryItem{
+		{
+			SQL:    "SELECT id FROM movies WHERE id = ? LIMIT 1;",
+			Params: []any{id},
+		},
+	}
+
+	resp, err := s.executeBatch(ctx, batch)
+	if err != nil {
+		return false, fmt.Errorf("checking movie exists %s in D1: %w", id, err)
+	}
+
+	if len(resp.Result) == 0 || len(resp.Result[0].Results) == 0 {
+		return false, nil
+	}
+
+	return true, nil
+}
+
 func (s *D1Store) GetMovie(ctx context.Context, id string) (*MovieDocument, bool, error) {
 	if s.httpClient == nil {
 		return nil, false, nil

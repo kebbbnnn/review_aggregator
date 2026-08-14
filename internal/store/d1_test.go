@@ -214,5 +214,101 @@ func TestD1Store_SaveAndGetMovie(t *testing.T) {
 	}
 }
 
+func TestD1Store_SaveMovieBatch_And_MovieExists(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req d1BatchRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad Request", http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if len(req.Batch) > 0 && req.Batch[0].SQL == "SELECT id FROM movies WHERE id = ? LIMIT 1;" {
+			id := req.Batch[0].Params[0].(string)
+			if id == "tmdb_found" {
+				_ = json.NewEncoder(w).Encode(d1APIResponse{
+					Success: true,
+					Result: []d1StatementResult{
+						{
+							Success: true,
+							Results: []map[string]any{{"id": "tmdb_found"}},
+						},
+					},
+				})
+			} else {
+				_ = json.NewEncoder(w).Encode(d1APIResponse{
+					Success: true,
+					Result: []d1StatementResult{
+						{
+							Success: true,
+							Results: []map[string]any{},
+						},
+					},
+				})
+			}
+			return
+		}
+
+		// Batch save response
+		_ = json.NewEncoder(w).Encode(d1APIResponse{
+			Success: true,
+			Result: []d1StatementResult{
+				{Success: true},
+				{Success: true},
+			},
+		})
+	}))
+	defer server.Close()
+
+	store := &D1Store{
+		accountID:  "acc-123",
+		databaseID: "db-456",
+		apiToken:   "test-token",
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	// Test MovieExists
+	exists, err := store.MovieExists(context.Background(), "tmdb_found")
+	if err != nil || !exists {
+		t.Fatalf("expected tmdb_found to exist, got exists=%v, err=%v", exists, err)
+	}
+
+	notExists, err := store.MovieExists(context.Background(), "tmdb_not_found")
+	if err != nil || notExists {
+		t.Fatalf("expected tmdb_not_found to not exist, got exists=%v, err=%v", notExists, err)
+	}
+
+	// Test SaveMovieBatch
+	docs := []*MovieDocument{
+		{
+			ID:          "tmdb_200",
+			TMDBID:      200,
+			Title:       "Batch Movie 1",
+			ReleaseDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			Genres:      []string{"Drama"},
+		},
+		{
+			ID:          "tmdb_201",
+			TMDBID:      201,
+			Title:       "Batch Movie 2",
+			ReleaseDate: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+			Genres:      []string{"Comedy", "Romance"},
+		},
+	}
+
+	err = store.SaveMovieBatch(context.Background(), docs)
+	if err != nil {
+		t.Fatalf("SaveMovieBatch failed: %v", err)
+	}
+
+	// Test empty batch (no-op)
+	err = store.SaveMovieBatch(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("SaveMovieBatch(nil) failed: %v", err)
+	}
+}
+
 func ptrFloat(f float64) *float64 { return &f }
 func ptrInt(i int) *int           { return &i }

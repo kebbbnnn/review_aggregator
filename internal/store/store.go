@@ -73,6 +73,8 @@ func ParseRottenTomatoesScore(raw string) *int {
 // Store defines persistence operations for movies.
 type Store interface {
 	SaveMovie(ctx context.Context, doc *MovieDocument) error
+	SaveMovieBatch(ctx context.Context, docs []*MovieDocument) error
 	GetMovie(ctx context.Context, id string) (*MovieDocument, bool, error)
+	MovieExists(ctx context.Context, id string) (bool, error)
 	Close() error
 }

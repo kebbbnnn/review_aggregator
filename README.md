@@ -8,7 +8,8 @@ A lightweight **Cloudflare Worker** serves consumer-facing read APIs globally at
 
 ## 🌟 Key Features
 
-* **Movie Discovery & Rating Enrichment**: Discovers recent releases via **TMDB API** and enriches scores with **OMDb API** (IMDb ratings & Rotten Tomatoes percentages).
+* **Continuous Full-Catalog Movie Discovery**: Crawls TMDB's full movie database (~900,000+ movies) with a dedicated stateful catalog pipeline that resumes across GitHub Actions runs using artifact cursors.
+* **Smart Deep Processing**: Selectively triggers review collection and LLM summarization for popular recent releases (popularity ≥ 50, released in last 6 months).
 * **Multi-Source Review Collection**: Concurrently gathers audience posts and reviews using Reddit's OAuth2 API (`r/movies`) and Letterboxd public RSS feeds (`golang.org/x/sync/errgroup`).
 * **Smart Preprocessing**: Cleans URLs, filters out short/junk comments, deduplicates repetitive text blocks, and ranks top reviews to optimize LLM token usage.
 * **Flexible LLM Provider Support**: Generic HTTP client using the standard OpenAI `/v1/chat/completions` API schema — zero code changes to switch between Google Gemini, Groq, OpenRouter, or local models.
@@ -21,60 +22,56 @@ A lightweight **Cloudflare Worker** serves consumer-facing read APIs globally at
 ## 🏗️ Architecture
 
 ```text
-               ┌───────────────────────┐
-               │    GitHub Actions     │
-               │   (Cron: Every 6h)    │
-               └───────────┬───────────┘
-                           │ runs go run ./cmd/pipeline
-                           ▼
-               ┌───────────────────────┐
-               │    Go Pipeline CLI    │
-               └───────────┬───────────┘
-                           │
-       ┌───────────────────┼───────────────────┐
-       ▼                   ▼                   ▼
-┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│   TMDB API   │    │   OMDb API   │    │  Reddit API  │
-│ (Discovery)  │    │  (Ratings)   │    │ (Audience)   │
-└──────────────┘    └──────────────┘    └──────────────┘
-                                               │
-                                               ▼
-                                        ┌──────────────┐
-                                        │ Letterboxd   │
-                                        │ (RSS Feed)   │
-                                        └──────────────┘
-                           │
-                           ▼
-               ┌───────────────────────┐
-               │   Review Processor    │
-               │ (Clean / Filter / Cap)│
-               └───────────┬───────────┘
-                           │
-                           ▼
-               ┌───────────────────────┐
-               │   LLM Client (OpenAI) │
-               │ (Structured Summary)  │
-               └───────────┬───────────┘
-                           │
-                           │ writes (REST API)
-                           ▼
-               ┌───────────────────────┐
-               │  Cloudflare D1 (DB)   │
-               │ (Normalized Schema)   │
-               └───────────▲───────────┘
-                           │
-                           │ native D1 binding
-                           │
-               ┌───────────┴───────────┐
-               │   Cloudflare Worker   │
-               │     (Edge API)        │
-               └───────────▲───────────┘
-                           │
-                           │ HTTPS requests
-                           │
-               ┌───────────┴───────────┐
-               │  Web / Mobile Clients │
-               └───────────────────────┘
+       ┌──────────────────────────────┐          ┌──────────────────────────────┐
+       │     GitHub Actions: Sync     │          │    GitHub Actions: Catalog   │
+       │       (Cron: Every 6h)       │          │       (Cron: Every 2h)       │
+       └──────────────┬───────────────┘          └──────────────┬───────────────┘
+                      │ runs go run ./cmd/pipeline              │ runs go run ./cmd/catalog
+                      ▼                                         ▼
+       ┌──────────────────────────────┐          ┌──────────────────────────────┐
+       │   Deep Review Pipeline CLI   │          │     TMDB Catalog Crawler     │
+       │   (Popular Recent Releases)  │          │    (Full Catalog Pagination) │
+       └──────────────┬───────────────┘          └──────────────┬───────────────┘
+                      │                                         │
+        ┌─────────────┼─────────────┐                           │
+        ▼             ▼             ▼                           │
+ ┌──────────────┐┌──────────────┐┌──────────────┐               │
+ │   TMDB API   ││   OMDb API   ││  Reddit API  │               │
+ │ (Popular Rec)││  (Ratings)   ││ (Audience)   │               │
+ └──────────────┘└──────────────┘└──────────────┘               │
+                                        │                       │
+                                        ▼                       │
+                                 ┌──────────────┐               │
+                                 │ Letterboxd   │               │
+                                 │ (RSS Feed)   │               │
+                                 └──────────────┘               │
+                      │                                         │
+                      ▼                                         │
+       ┌──────────────────────────────┐                         │
+       │   Review Processor / Clean   │                         │
+       └──────────────┬───────────────┘                         │
+                      │                                         │
+                      ▼                                         │
+       ┌──────────────────────────────┐                         │
+       │   LLM Client (OpenAI-compat) │                         │
+       │   (Structured Summary)       │                         │
+       └──────────────┬───────────────┘                         │
+                      │ writes deep summary                     │ writes metadata
+                      └────────────────────┬────────────────────┘
+                                           ▼
+                               ┌───────────────────────┐
+                               │  Cloudflare D1 (DB)   │
+                               │ (Normalized Schema)   │
+                               └───────────▲───────────┘
+                                           │ native D1 binding
+                               ┌───────────┴───────────┐
+                               │   Cloudflare Worker   │
+                               │     (Edge API)        │
+                               └───────────▲───────────┘
+                                           │ HTTPS requests
+                               ┌───────────┴───────────┐
+                               │  Web / Mobile Clients │
+                               └───────────────────────┘
 ```
 
 ---
@@ -84,10 +81,13 @@ A lightweight **Cloudflare Worker** serves consumer-facing read APIs globally at
 ```text
 .
 ├── cmd/
-│   └── pipeline/        # Go CLI entrypoint for batch sync
+│   ├── catalog/         # Go CLI for full TMDB catalog discovery & backfill
+│   │   └── main.go
+│   └── pipeline/        # Go CLI entrypoint for deep review & LLM sync
 │       └── main.go
 │
 ├── internal/
+│   ├── catalog/         # Catalog orchestrator, rate limiting, and cursor management
 │   ├── config/          # Environment variables & .env loader
 │   ├── discovery/       # TMDB & OMDb API integrations
 │   ├── collector/       # Review collectors (Reddit OAuth2 API, Letterboxd RSS)
@@ -108,7 +108,8 @@ A lightweight **Cloudflare Worker** serves consumer-facing read APIs globally at
 │
 ├── .github/
 │   └── workflows/
-│       ├── scheduled_sync.yml  # Runs Go pipeline every 6h on GitHub Actions
+│       ├── catalog_sync.yml    # Runs TMDB catalog crawler every 2h on GitHub Actions
+│       ├── scheduled_sync.yml  # Runs deep review pipeline every 6h on GitHub Actions
 │       └── deploy_worker.yml   # Deploys Worker on push to main
 │
 ├── .env.example         # Template environment variable configuration
@@ -134,12 +135,14 @@ cp .env.example .env
 | `REDDIT_CLIENT_SECRET` | Optional | Reddit OAuth App Client Secret | — |
 | `REDDIT_USER_AGENT` | No | User agent header for Reddit requests | `MovieReviewAggregator/1.0` |
 | `LLM_BASE_URL` | No | Base URL for OpenAI-compatible LLM endpoint | `https://generativelanguage.googleapis.com/v1beta/openai` |
-| `LLM_API_KEY` | **Yes** | API key for LLM provider | — |
+| `LLM_API_KEY` | Optional | API key for LLM provider (needed for deep summary) | — |
 | `LLM_MODEL` | No | LLM model identifier | `gemini-2.5-flash` |
 | `CF_ACCOUNT_ID` | **Yes** | Cloudflare Account ID | — |
 | `CF_D1_DATABASE_ID` | **Yes** | Cloudflare D1 Database UUID | — |
 | `CF_API_TOKEN` | **Yes** | Cloudflare API Token with D1 Edit permissions | — |
-| `MAX_MOVIES_PER_SYNC` | No | Max movies to discover per run | `10` |
+| `MAX_MOVIES_PER_SYNC` | No | Max movies to process in deep pipeline per run | `10` |
+| `MIN_POPULARITY` | No | Minimum TMDB popularity for deep review pipeline | `50.0` |
+| `RECENT_MONTHS` | No | How many months back to consider for deep review pipeline | `6` |
 
 ---
 
@@ -189,7 +192,12 @@ cp .env.example .env
    go test -v ./...
    ```
 
-2. **Execute pipeline manually**:
+2. **Execute catalog crawler (full discovery & metadata backfill)**:
+   ```bash
+   go run ./cmd/catalog --cursor=cursor.json --max-pages=5
+   ```
+
+3. **Execute deep review & LLM pipeline manually**:
    ```bash
    go run ./cmd/pipeline
    ```
@@ -236,26 +244,34 @@ Add the following secrets:
 | `CF_D1_DATABASE_ID` | Your Cloudflare D1 Database UUID | **Yes** |
 | `CF_API_TOKEN` | Cloudflare API Token (`D1:Edit`, `Workers:Edit`) | **Yes** |
 | `TMDB_API_KEY` | TMDB API v3 Key | **Yes** |
-| `LLM_API_KEY` | OpenAI/Gemini/Groq API Key | **Yes** |
+| `LLM_API_KEY` | OpenAI/Gemini/Groq API Key | Optional (for deep summaries) |
 | `OMDB_API_KEY` | OMDb API Key | Optional |
 | `LLM_BASE_URL` | Custom OpenAI-compatible endpoint URL | Optional |
 | `LLM_MODEL` | Custom model identifier | Optional |
 | `REDDIT_CLIENT_ID` | Reddit App Client ID | Optional |
 | `REDDIT_CLIENT_SECRET` | Reddit App Secret | Optional |
 | `MAX_MOVIES_PER_SYNC` | Limit per sync run (default: 10) | Optional |
+| `MIN_POPULARITY` | Min popularity for deep sync (default: 50.0) | Optional |
+| `RECENT_MONTHS` | Months back for deep sync (default: 6) | Optional |
 
 ---
 
-### Step 2: Triggering the Pipeline Sync
+### Step 2: Workflows
 
-#### Option A: Manual Trigger (On Demand)
+The repository includes two automated workflows:
+
+#### 1. Catalog Movie Sync (`.github/workflows/catalog_sync.yml`)
+- **Schedule**: Every 2 hours (`cron: '30 */2 * * *'`)
+- **Action**: Crawls TMDB's full movie catalog, saves metadata + genres to D1 in batches, and persists its progress across runs via GitHub Actions artifact cursors.
+
+#### 2. Scheduled Movie Review Sync (`.github/workflows/scheduled_sync.yml`)
+- **Schedule**: Every 6 hours (`cron: '0 */6 * * *'`)
+- **Action**: Discovers popular recent movies, gathers Reddit + Letterboxd reviews, generates LLM summaries, and writes detailed sentiment scores and pros/cons to D1.
+
+#### Manual Trigger (On Demand)
 1. Go to the **Actions** tab on your GitHub repository.
-2. Under **Workflows** in the left sidebar, click **"Scheduled Movie Review Sync"**.
-3. Click the **Run workflow** dropdown on the right.
-4. Select `Branch: main` and click the green **Run workflow** button.
-
-#### Option B: Automated Cron Trigger
-The workflow in [`.github/workflows/scheduled_sync.yml`](.github/workflows/scheduled_sync.yml) is scheduled to run automatically **every 6 hours** (`cron: '0 */6 * * *'`).
+2. Select either **"Catalog Movie Sync"** or **"Scheduled Movie Review Sync"**.
+3. Click the **Run workflow** dropdown on the right and select `Branch: main`.
 
 ---
 

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"time"
 
 	"review_aggregator/internal/collector"
 	"review_aggregator/internal/config"
@@ -32,6 +33,9 @@ func main() {
 	tmdb := discovery.NewTMDBClient(cfg.TMDBAPIKey)
 	omdb := discovery.NewOMDBClient(cfg.OMDBAPIKey)
 
+	releasedAfter := time.Now().AddDate(0, -cfg.RecentMonths, 0)
+	discoverer := discovery.NewPopularRecentDiscoverer(tmdb, cfg.MinPopularity, releasedAfter)
+
 	collectors := []collector.Collector{
 		collector.NewRedditCollector(cfg.RedditClientID, cfg.RedditClientSecret, cfg.RedditUserAgent),
 		collector.NewLetterboxdCollector(cfg.RedditUserAgent),
@@ -44,7 +48,7 @@ func main() {
 		llmClient = llm.NewClient(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel)
 	}
 
-	orchestrator := pipeline.NewOrchestrator(tmdb, omdb, collectors, proc, llmClient, st)
+	orchestrator := pipeline.NewOrchestrator(discoverer, omdb, collectors, proc, llmClient, st)
 
 	result, err := orchestrator.Run(ctx, cfg.MaxMoviesPerSync)
 	if err != nil {

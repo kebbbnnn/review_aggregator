@@ -20,6 +20,8 @@ type Config struct {
 	CFD1DatabaseID     string
 	CFAPIToken         string
 	MaxMoviesPerSync   int
+	MinPopularity      float64
+	RecentMonths       int
 }
 
 func Load() (*Config, error) {
@@ -43,6 +45,18 @@ func Load() (*Config, error) {
 		maxMovies = 10
 	}
 
+	minPopStr := getEnv("MIN_POPULARITY", "50.0")
+	minPop, err := strconv.ParseFloat(minPopStr, 64)
+	if err != nil {
+		minPop = 50.0
+	}
+
+	recentMonthsStr := getEnv("RECENT_MONTHS", "6")
+	recentMonths, err := strconv.Atoi(recentMonthsStr)
+	if err != nil {
+		recentMonths = 6
+	}
+
 	cfg := &Config{
 		TMDBAPIKey:         tmdbKey,
 		OMDBAPIKey:         omdbKey,
@@ -56,6 +70,8 @@ func Load() (*Config, error) {
 		CFD1DatabaseID:     cfDatabaseID,
 		CFAPIToken:         cfAPIToken,
 		MaxMoviesPerSync:   maxMovies,
+		MinPopularity:      minPop,
+		RecentMonths:       recentMonths,
 	}
 
 	return cfg, nil

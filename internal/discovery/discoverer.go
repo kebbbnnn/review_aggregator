@@ -19,6 +19,8 @@ type Movie struct {
 	Overview    string    `json:"overview,omitempty"`
 	Genres      []string  `json:"genres,omitempty"`
 	Scores      Scores    `json:"scores"`
+	Popularity  float64   `json:"popularity,omitempty"`
+	GenreIDs    []int     `json:"genre_ids,omitempty"`
 }
 
 type Discoverer interface {

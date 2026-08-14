@@ -65,11 +65,27 @@ func (m *mockStore) SaveMovie(ctx context.Context, doc *store.MovieDocument) err
 	return nil
 }
 
+func (m *mockStore) SaveMovieBatch(ctx context.Context, docs []*store.MovieDocument) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, doc := range docs {
+		m.movies[doc.ID] = doc
+	}
+	return nil
+}
+
 func (m *mockStore) GetMovie(ctx context.Context, id string) (*store.MovieDocument, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	doc, ok := m.movies[id]
 	return doc, ok, nil
+}
+
+func (m *mockStore) MovieExists(ctx context.Context, id string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.movies[id]
+	return ok, nil
 }
 
 func (m *mockStore) Close() error { return nil }
