@@ -6,30 +6,31 @@ on:
   workflow_dispatch:
 
 jobs:
-  trigger-sync:
+  sync:
+    name: Run Go Pipeline
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Movie Aggregator Sync Endpoint
-        run: |
-          if [ -z "${{ secrets.RENDER_SERVICE_URL }}" ]; then
-            echo "Error: RENDER_SERVICE_URL secret is not configured."
-            exit 1
-          fi
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-          echo "Triggering pipeline sync..."
-          response=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST "${{ secrets.RENDER_SERVICE_URL }}/api/v1/jobs/sync" \
-            -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
-            -H "Content-Type: application/json")
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
 
-          http_status=$(echo "$response" | grep "HTTP_STATUS" | cut -d':' -f2)
-          body=$(echo "$response" | sed '/HTTP_STATUS/d')
-
-          echo "Response Body:"
-          echo "$body"
-
-          if [ "$http_status" -ne 200 ]; then
-            echo "Sync trigger failed with status code: $http_status"
-            exit 1
-          fi
-
-          echo "Sync trigger completed successfully!"
+      - name: Run Pipeline Sync
+        run: go run ./cmd/pipeline
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          MAX_MOVIES_PER_SYNC: ${{ secrets.MAX_MOVIES_PER_SYNC || '10' }}

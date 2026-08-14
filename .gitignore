@@ -5,11 +5,17 @@
 # Binaries & Build Output
 bin/
 /server
+/pipeline
 
-# Service Account Keys
-*.json
-!go.mod
-!go.sum
+# Node / Cloudflare Worker
+node_modules/
+worker/node_modules/
+.wrangler/
+worker/.wrangler/
+
+# Credential Keys
+service-account*.json
+credentials*.json
 
 # OS Files
 .DS_Store

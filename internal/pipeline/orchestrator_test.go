@@ -23,9 +23,9 @@ func (m *mockDiscoverer) DiscoverRecentMovies(ctx context.Context, limit int) ([
 }
 
 type mockCollector struct {
-	mu         sync.Mutex
-	calls      int
-	reviews    []collector.Review
+	mu      sync.Mutex
+	calls   int
+	reviews []collector.Review
 }
 
 func (m *mockCollector) Name() string { return "mock" }
@@ -74,6 +74,8 @@ func (m *mockStore) GetMovie(ctx context.Context, id string) (*store.MovieDocume
 
 func (m *mockStore) Close() error { return nil }
 
+func ptrInt(i int) *int { return &i }
+
 func TestOrchestrator_SkipSummaryForExistingMovie(t *testing.T) {
 	movie := discovery.Movie{
 		TMDBID:      1001,
@@ -83,17 +85,14 @@ func TestOrchestrator_SkipSummaryForExistingMovie(t *testing.T) {
 	}
 
 	movieID := discovery.FormatTMDBID(movie.TMDBID)
-	existingSummary := &llm.SummaryResponse{
-		OverallSentiment: 85,
-		AudienceConsensus: "Already summarized consensus",
-	}
 
 	st := newMockStore()
 	st.movies[movieID] = &store.MovieDocument{
 		ID:                  movieID,
 		TMDBID:              movie.TMDBID,
 		Title:               movie.Title,
-		Summary:             existingSummary,
+		OverallSentiment:    ptrInt(85),
+		AudienceConsensus:   "Already summarized consensus",
 		ReviewCountAnalyzed: 10,
 		LastUpdated:         time.Now().Add(-25 * time.Hour), // Older than 24h
 	}
@@ -128,8 +127,8 @@ func TestOrchestrator_SkipSummaryForExistingMovie(t *testing.T) {
 	if savedDoc == nil {
 		t.Fatalf("expected movie doc to be saved")
 	}
-	if savedDoc.Summary.AudienceConsensus != "Already summarized consensus" {
-		t.Errorf("expected summary to be preserved, got %s", savedDoc.Summary.AudienceConsensus)
+	if savedDoc.AudienceConsensus != "Already summarized consensus" {
+		t.Errorf("expected summary to be preserved, got %s", savedDoc.AudienceConsensus)
 	}
 	if savedDoc.ReviewCountAnalyzed != 10 {
 		t.Errorf("expected review count 10, got %d", savedDoc.ReviewCountAnalyzed)
@@ -178,8 +177,8 @@ func TestOrchestrator_GenerateSummaryForMovieWithoutExistingSummary(t *testing.T
 	if savedDoc == nil {
 		t.Fatalf("expected movie doc to be saved")
 	}
-	if savedDoc.Summary.AudienceConsensus != "Newly generated consensus" {
-		t.Errorf("expected new summary, got %s", savedDoc.Summary.AudienceConsensus)
+	if savedDoc.AudienceConsensus != "Newly generated consensus" {
+		t.Errorf("expected new summary, got %s", savedDoc.AudienceConsensus)
 	}
 }
 
@@ -193,11 +192,11 @@ func TestOrchestrator_FreshnessCheckSkipsMovie(t *testing.T) {
 	movieID := discovery.FormatTMDBID(movie.TMDBID)
 	st := newMockStore()
 	st.movies[movieID] = &store.MovieDocument{
-		ID:          movieID,
-		TMDBID:      movie.TMDBID,
-		Title:       movie.Title,
-		Summary:     &llm.SummaryResponse{OverallSentiment: 80},
-		LastUpdated: time.Now().Add(-1 * time.Hour), // Fresh (< 24h)
+		ID:               movieID,
+		TMDBID:           movie.TMDBID,
+		Title:            movie.Title,
+		OverallSentiment: ptrInt(80),
+		LastUpdated:      time.Now().Add(-1 * time.Hour), // Fresh (< 24h)
 	}
 
 	disc := &mockDiscoverer{movies: []discovery.Movie{movie}}

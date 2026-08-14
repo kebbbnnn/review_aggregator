@@ -2,15 +2,12 @@ package config
 
 import (
 	"bufio"
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
 )
 
 type Config struct {
-	Port               string
-	CronSecret         string
 	TMDBAPIKey         string
 	OMDBAPIKey         string
 	RedditClientID     string
@@ -19,15 +16,15 @@ type Config struct {
 	LLMBaseURL         string
 	LLMAPIKey          string
 	LLMModel           string
-	FirebaseProjectID  string
+	CFAccountID        string
+	CFD1DatabaseID     string
+	CFAPIToken         string
 	MaxMoviesPerSync   int
 }
 
 func Load() (*Config, error) {
 	_ = loadDotEnv(".env")
 
-	port := getEnv("PORT", "8080")
-	cronSecret := os.Getenv("CRON_SECRET")
 	tmdbKey := os.Getenv("TMDB_API_KEY")
 	omdbKey := os.Getenv("OMDB_API_KEY")
 	redditID := os.Getenv("REDDIT_CLIENT_ID")
@@ -36,7 +33,9 @@ func Load() (*Config, error) {
 	llmBaseURL := getEnv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
 	llmAPIKey := os.Getenv("LLM_API_KEY")
 	llmModel := getEnv("LLM_MODEL", "gemini-2.5-flash")
-	firebaseProjectID := os.Getenv("FIREBASE_PROJECT_ID")
+	cfAccountID := os.Getenv("CF_ACCOUNT_ID")
+	cfDatabaseID := os.Getenv("CF_D1_DATABASE_ID")
+	cfAPIToken := os.Getenv("CF_API_TOKEN")
 
 	maxMoviesStr := getEnv("MAX_MOVIES_PER_SYNC", "10")
 	maxMovies, err := strconv.Atoi(maxMoviesStr)
@@ -45,8 +44,6 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		Port:               port,
-		CronSecret:         cronSecret,
 		TMDBAPIKey:         tmdbKey,
 		OMDBAPIKey:         omdbKey,
 		RedditClientID:     redditID,
@@ -55,18 +52,13 @@ func Load() (*Config, error) {
 		LLMBaseURL:         llmBaseURL,
 		LLMAPIKey:          llmAPIKey,
 		LLMModel:           llmModel,
-		FirebaseProjectID:  firebaseProjectID,
+		CFAccountID:        cfAccountID,
+		CFD1DatabaseID:     cfDatabaseID,
+		CFAPIToken:         cfAPIToken,
 		MaxMoviesPerSync:   maxMovies,
 	}
 
 	return cfg, nil
-}
-
-func (c *Config) Validate() error {
-	if c.CronSecret == "" {
-		return fmt.Errorf("CRON_SECRET environment variable is required")
-	}
-	return nil
 }
 
 func getEnv(key, fallback string) string {

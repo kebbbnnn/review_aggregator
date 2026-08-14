@@ -69,7 +69,7 @@ func (o *Orchestrator) Run(ctx context.Context, limit int) (*SyncResult, error) 
 		// Freshness check (skip if updated within 24h AND already has a valid summary)
 		if existing, found, _ := o.store.GetMovie(ctx, movieID); found {
 			existingDoc = existing
-			if time.Since(existing.LastUpdated) < 24*time.Hour && existing.Summary != nil {
+			if time.Since(existing.LastUpdated) < 24*time.Hour && existing.HasSummary() {
 				log.Printf("[PIPELINE] Skipping '%s' (fresh & has summary)", movie.Title)
 				result.MoviesSkipped++
 				continue
@@ -85,12 +85,20 @@ func (o *Orchestrator) Run(ctx context.Context, limit int) (*SyncResult, error) 
 			}
 		}
 
-		var summary *llm.SummaryResponse
+		var overallSentiment *int
+		var audienceConsensus string
+		var recommendation string
+		var pros, cons, themes []string
 		var reviewCount int
 
-		if existingDoc != nil && existingDoc.Summary != nil {
+		if existingDoc != nil && existingDoc.HasSummary() {
 			log.Printf("[PIPELINE] Existing summary found for '%s', skipping new summary generation", movie.Title)
-			summary = existingDoc.Summary
+			overallSentiment = existingDoc.OverallSentiment
+			audienceConsensus = existingDoc.AudienceConsensus
+			recommendation = existingDoc.Recommendation
+			pros = existingDoc.Pros
+			cons = existingDoc.Cons
+			themes = existingDoc.Themes
 			reviewCount = existingDoc.ReviewCountAnalyzed
 		} else {
 			// Concurrently fetch reviews across all collectors
@@ -112,8 +120,13 @@ func (o *Orchestrator) Run(ctx context.Context, limit int) (*SyncResult, error) 
 					log.Println("[ERROR]", errMsg)
 					result.Errors = append(result.Errors, errMsg)
 					continue
-				} else {
-					summary = sum
+				} else if sum != nil {
+					overallSentiment = &sum.OverallSentiment
+					audienceConsensus = sum.AudienceConsensus
+					recommendation = sum.Recommendation
+					pros = sum.Pros
+					cons = sum.Cons
+					themes = sum.CommonThemes
 				}
 			}
 		}
@@ -127,8 +140,14 @@ func (o *Orchestrator) Run(ctx context.Context, limit int) (*SyncResult, error) 
 			PosterURL:           movie.PosterURL,
 			Overview:            movie.Overview,
 			Genres:              movie.Genres,
-			Scores:              movie.Scores,
-			Summary:             summary,
+			IMDbScore:           store.ParseIMDbScore(movie.Scores.IMDb),
+			RottenTomatoes:      store.ParseRottenTomatoesScore(movie.Scores.RottenTomatoes),
+			OverallSentiment:    overallSentiment,
+			AudienceConsensus:   audienceConsensus,
+			Recommendation:      recommendation,
+			Pros:                pros,
+			Cons:                cons,
+			Themes:              themes,
 			ReviewCountAnalyzed: reviewCount,
 			LastUpdated:         time.Now(),
 		}

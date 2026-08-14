@@ -1,0 +1,8 @@
+name = "review-aggregator-api"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "movie-review-aggregator"
+database_id = "ccb5ff55-c631-4b69-ac88-6e320fff4334"
