@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CineScope — AI Movie Review Intelligence</title>
+  <meta name="description" content="Discover audience sentiment and AI-generated review summaries across thousands of movies. Powered by Reddit, Letterboxd, and advanced LLMs.">
+  <meta name="theme-color" content="#0a0a0f">
+  
+  <!-- Open Graph -->
+  <meta property="og:title" content="CineScope — AI Movie Review Intelligence">
+  <meta property="og:description" content="Discover audience sentiment and AI-generated review summaries across thousands of movies.">
+  <meta property="og:type" content="website">
+
+  <!-- Google Fonts: Outfit (Display/Headings) & Inter (Body/UI) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Top Navigation Bar -->
+  <header class="navbar" id="navbar">
+    <div class="nav-container">
+      <a href="#/" class="nav-brand" id="brand-logo" aria-label="CineScope Home">
+        <div class="brand-icon">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
+            <line x1="7" y1="2" x2="7" y2="22"></line>
+            <line x1="17" y1="2" x2="17" y2="22"></line>
+            <line x1="2" y1="12" x2="22" y2="12"></line>
+            <line x1="2" y1="7" x2="7" y2="7"></line>
+            <line x1="2" y1="17" x2="7" y2="17"></line>
+            <line x1="17" y1="17" x2="22" y2="17"></line>
+            <line x1="17" y1="7" x2="22" y2="7"></line>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <span class="brand-title">CINESCOPE</span>
+          <span class="brand-badge">AI INSIGHTS</span>
+        </div>
+      </a>
+
+      <!-- Search Component -->
+      <form class="nav-search-form" id="search-form" role="search">
+        <div class="search-input-wrapper">
+          <svg class="search-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input 
+            type="search" 
+            id="search-input" 
+            class="search-input" 
+            placeholder="Search 9,600+ movies..." 
+            autocomplete="off"
+            aria-label="Search movies"
+          >
+          <button type="button" id="search-clear-btn" class="search-clear-btn" aria-label="Clear search" style="display: none;">
+            &times;
+          </button>
+        </div>
+      </form>
+
+      <!-- Quick Nav Action / Status -->
+      <div class="nav-actions">
+        <div class="status-indicator" title="Cloudflare D1 & Worker Live">
+          <span class="status-dot"></span>
+          <span class="status-text" id="status-count">Catalog Online</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Application Root -->
+  <main class="main-content" id="app" role="main">
+    <!-- Dynamic view rendered by app.js -->
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="footer-container">
+      <div class="footer-left">
+        <span class="footer-logo">CINESCOPE</span>
+        <p class="footer-description">
+          Automated multi-source sentiment aggregation synthesized with OpenAI-compatible LLMs.
+        </p>
+      </div>
+      <div class="footer-right">
+        <span class="footer-tagline">Built with Cloudflare Workers, D1 &amp; Render</span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

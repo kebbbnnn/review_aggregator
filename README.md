@@ -327,6 +327,33 @@ npx wrangler deploy
 
 ---
 
+## 🎨 CineScope Web Frontend
+
+A modern, dark cinematic web interface for exploring movies and reading AI-generated audience reviews.
+
+### Features
+* **Discover Grid**: Browse 9,600+ cataloged movies with sorting by AI sentiment score, release date, IMDb score, or Rotten Tomatoes rating.
+* **Instant Genre Filters**: Filter across Action, Animation, Sci-Fi, Horror, Comedy, and more.
+* **Full AI Intelligence Reports**: Rich detail view displaying the audience consensus quote, "Who Should Watch This" recommendations, pros/cons breakdown, and common discussion themes.
+* **Real-time Search**: Search across thousands of titles with instant results.
+* **Zero Backend Costs**: Built as a pure static site (HTML5/CSS3/Vanilla JS) connecting to Cloudflare Worker API.
+
+### Running Locally
+```bash
+cd website
+python3 -m http.server 8080
+# Open http://localhost:8080 in your browser
+```
+
+### Deploying to Render.com
+1. Connect this repository to your [Render.com](https://render.com) dashboard.
+2. Render automatically detects [`render.yaml`](render.yaml) as a **Static Site**:
+   - **Publish Directory**: `./website`
+   - **Build Command**: `echo "No build required"`
+3. Click **Deploy**.
+
+---
+
 ## 📜 License
 
 MIT License.

@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: cinescope
+    runtime: static
+    buildCommand: echo "No build required for static assets"
+    staticPublishPath: ./website
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: public, max-age=3600
