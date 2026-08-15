@@ -1,4 +1,5 @@
 import { getMovieById, listMovies, searchMovies } from './db';
+import { fetchSummariesBatch, fetchSummary } from './summary-client';
 import { Env, ListMoviesOptions } from './types';
 
 const CORS_HEADERS: Record<string, string> = {
@@ -50,6 +51,22 @@ export default {
         const safeLimit = isNaN(limit) || limit <= 0 ? 10 : Math.min(limit, 50);
 
         const results = await searchMovies(env.DB, q.trim(), safeLimit);
+        
+        // Enrich with summaries from DB2 (via edge cache)
+        if (results.length > 0) {
+          const ids = results.map((m) => m.id);
+          const summaryMap = await fetchSummariesBatch(ids, env);
+          for (const movie of results) {
+            const summaryData = summaryMap.get(movie.id);
+            if (summaryData) {
+              if (summaryData.summary) {
+                movie.summary = summaryData.summary;
+              }
+              movie.review_count_analyzed = summaryData.review_count;
+            }
+          }
+        }
+
         return jsonResponse({
           query: q.trim(),
           total: results.length,
@@ -65,6 +82,16 @@ export default {
         if (!movie) {
           return errorResponse(`Movie with ID '${id}' not found`, 404);
         }
+
+        // Enrich with summary from DB2 (via edge cache)
+        const summaryData = await fetchSummary(id, env);
+        if (summaryData) {
+          if (summaryData.summary) {
+            movie.summary = summaryData.summary;
+          }
+          movie.review_count_analyzed = summaryData.review_count;
+        }
+
         return jsonResponse({ result: movie });
       }
 
@@ -84,8 +111,24 @@ export default {
           offset: offsetStr ? parseInt(offsetStr, 10) : 0,
         };
 
-        const result = await listMovies(env.DB, options);
-        return jsonResponse(result);
+        const listResult = await listMovies(env.DB, options);
+
+        // Enrich with summaries from DB2 (via edge cache)
+        if (listResult.results.length > 0) {
+          const ids = listResult.results.map((m) => m.id);
+          const summaryMap = await fetchSummariesBatch(ids, env);
+          for (const movie of listResult.results) {
+            const summaryData = summaryMap.get(movie.id);
+            if (summaryData) {
+              if (summaryData.summary) {
+                movie.summary = summaryData.summary;
+              }
+              movie.review_count_analyzed = summaryData.review_count;
+            }
+          }
+        }
+
+        return jsonResponse(listResult);
       }
 
       return errorResponse('Not Found', 404);

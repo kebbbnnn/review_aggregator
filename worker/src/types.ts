@@ -1,5 +1,7 @@
 export interface Env {
   DB: D1Database;
+  SUMMARY_WORKER_URL?: string;
+  SUMMARY_API_KEY?: string;
 }
 
 export interface MovieRow {
@@ -12,29 +14,12 @@ export interface MovieRow {
   overview: string | null;
   imdb_score: number | null;
   rotten_tomatoes: number | null;
-  overall_sentiment: number | null;
-  audience_consensus: string | null;
-  recommendation: string | null;
-  review_count: number;
   last_updated: string;
 }
 
 export interface GenreRow {
   movie_id: string;
   genre: string;
-}
-
-export interface PointRow {
-  id: number;
-  movie_id: string;
-  type: 'pro' | 'con';
-  content: string;
-}
-
-export interface ThemeRow {
-  id: number;
-  movie_id: string;
-  theme: string;
 }
 
 export interface MovieScores {
@@ -68,7 +53,7 @@ export interface MovieResponse {
 
 export interface ListMoviesOptions {
   genre?: string;
-  sort?: 'release_date' | 'imdb_score' | 'rotten_tomatoes' | 'overall_sentiment' | 'last_updated';
+  sort?: 'release_date' | 'imdb_score' | 'rotten_tomatoes' | 'last_updated';
   order?: 'asc' | 'desc';
   limit?: number;
   offset?: number;

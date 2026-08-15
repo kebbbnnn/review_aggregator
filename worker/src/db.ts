@@ -3,33 +3,18 @@ import {
   ListMoviesOptions,
   MovieResponse,
   MovieRow,
-  PointRow,
-  ThemeRow,
 } from './types';
 
-export function buildMovieResponse(
+export function buildMovieMetadataResponse(
   movie: MovieRow,
-  genres: string[] = [],
-  points: { type: 'pro' | 'con'; content: string }[] = [],
-  themes: string[] = []
+  genres: string[] = []
 ): MovieResponse {
-  const pros = points.filter((p) => p.type === 'pro').map((p) => p.content);
-  const cons = points.filter((p) => p.type === 'con').map((p) => p.content);
-
-  const hasSummary =
-    movie.overall_sentiment !== null ||
-    (movie.audience_consensus && movie.audience_consensus !== '') ||
-    (movie.recommendation && movie.recommendation !== '') ||
-    pros.length > 0 ||
-    cons.length > 0 ||
-    themes.length > 0;
-
   const res: MovieResponse = {
     id: movie.id,
     tmdb_id: movie.tmdb_id,
     title: movie.title,
     release_date: movie.release_date,
-    review_count_analyzed: movie.review_count,
+    review_count_analyzed: 0,
     last_updated: movie.last_updated,
     scores: {},
   };
@@ -39,39 +24,20 @@ export function buildMovieResponse(
   if (movie.overview) res.overview = movie.overview;
   if (genres.length > 0) res.genres = genres;
 
-  if (movie.imdb_score !== null) {
+  if (movie.imdb_score !== null && movie.imdb_score !== undefined) {
     res.scores.imdb = movie.imdb_score.toString();
   }
-  if (movie.rotten_tomatoes !== null) {
+  if (movie.rotten_tomatoes !== null && movie.rotten_tomatoes !== undefined) {
     res.scores.rotten_tomatoes = `${movie.rotten_tomatoes}%`;
-  }
-
-  if (hasSummary) {
-    res.summary = {
-      pros,
-      cons,
-      common_themes: themes,
-    };
-    if (movie.overall_sentiment !== null) {
-      res.summary.overall_sentiment = movie.overall_sentiment;
-    }
-    if (movie.audience_consensus) {
-      res.summary.audience_consensus = movie.audience_consensus;
-    }
-    if (movie.recommendation) {
-      res.summary.recommendation = movie.recommendation;
-    }
   }
 
   return res;
 }
 
 export async function getMovieById(db: D1Database, id: string): Promise<MovieResponse | null> {
-  const [movieRes, genresRes, pointsRes, themesRes] = await db.batch<any>([
+  const [movieRes, genresRes] = await db.batch<any>([
     db.prepare('SELECT * FROM movies WHERE id = ? LIMIT 1').bind(id),
     db.prepare('SELECT genre FROM movie_genres WHERE movie_id = ?').bind(id),
-    db.prepare('SELECT type, content FROM movie_points WHERE movie_id = ?').bind(id),
-    db.prepare('SELECT theme FROM movie_themes WHERE movie_id = ?').bind(id),
   ]);
 
   const movieRows = (movieRes.results as MovieRow[]) || [];
@@ -81,10 +47,8 @@ export async function getMovieById(db: D1Database, id: string): Promise<MovieRes
 
   const movie = movieRows[0];
   const genres = ((genresRes.results as { genre: string }[]) || []).map((g) => g.genre);
-  const points = (pointsRes.results as { type: 'pro' | 'con'; content: string }[]) || [];
-  const themes = ((themesRes.results as { theme: string }[]) || []).map((t) => t.theme);
 
-  return buildMovieResponse(movie, genres, points, themes);
+  return buildMovieMetadataResponse(movie, genres);
 }
 
 export async function searchMovies(
@@ -98,7 +62,7 @@ export async function searchMovies(
     .all<MovieRow>();
 
   const movies = movieRes.results || [];
-  return populateRelations(db, movies);
+  return populateGenres(db, movies);
 }
 
 export async function listMovies(
@@ -112,7 +76,6 @@ export async function listMovies(
     'release_date',
     'imdb_score',
     'rotten_tomatoes',
-    'overall_sentiment',
     'last_updated',
   ];
   const sortCol = allowedSorts.includes(options.sort || '') ? options.sort! : 'last_updated';
@@ -143,12 +106,12 @@ export async function listMovies(
     .all<MovieRow>();
 
   const movies = movieRes.results || [];
-  const results = await populateRelations(db, movies);
+  const results = await populateGenres(db, movies);
 
   return { total, limit, offset, results };
 }
 
-async function populateRelations(db: D1Database, movies: MovieRow[]): Promise<MovieResponse[]> {
+async function populateGenres(db: D1Database, movies: MovieRow[]): Promise<MovieResponse[]> {
   if (movies.length === 0) {
     return [];
   }
@@ -156,47 +119,19 @@ async function populateRelations(db: D1Database, movies: MovieRow[]): Promise<Mo
   const movieIds = movies.map((m) => m.id);
   const placeholders = movieIds.map(() => '?').join(',');
 
-  const [genresRes, pointsRes, themesRes] = await db.batch<any>([
-    db
-      .prepare(`SELECT movie_id, genre FROM movie_genres WHERE movie_id IN (${placeholders})`)
-      .bind(...movieIds),
-    db
-      .prepare(
-        `SELECT movie_id, type, content FROM movie_points WHERE movie_id IN (${placeholders})`
-      )
-      .bind(...movieIds),
-    db
-      .prepare(`SELECT movie_id, theme FROM movie_themes WHERE movie_id IN (${placeholders})`)
-      .bind(...movieIds),
-  ]);
+  const genresRes = await db
+    .prepare(`SELECT movie_id, genre FROM movie_genres WHERE movie_id IN (${placeholders})`)
+    .bind(...movieIds)
+    .all<GenreRow>();
 
   const genresByMovie = new Map<string, string[]>();
-  for (const g of (genresRes.results as GenreRow[]) || []) {
+  for (const g of genresRes.results || []) {
     const list = genresByMovie.get(g.movie_id) || [];
     list.push(g.genre);
     genresByMovie.set(g.movie_id, list);
   }
 
-  const pointsByMovie = new Map<string, { type: 'pro' | 'con'; content: string }[]>();
-  for (const p of (pointsRes.results as PointRow[]) || []) {
-    const list = pointsByMovie.get(p.movie_id) || [];
-    list.push({ type: p.type, content: p.content });
-    pointsByMovie.set(p.movie_id, list);
-  }
-
-  const themesByMovie = new Map<string, string[]>();
-  for (const t of (themesRes.results as ThemeRow[]) || []) {
-    const list = themesByMovie.get(t.movie_id) || [];
-    list.push(t.theme);
-    themesByMovie.set(t.movie_id, list);
-  }
-
   return movies.map((m) =>
-    buildMovieResponse(
-      m,
-      genresByMovie.get(m.id) || [],
-      pointsByMovie.get(m.id) || [],
-      themesByMovie.get(m.id) || []
-    )
+    buildMovieMetadataResponse(m, genresByMovie.get(m.id) || [])
   );
 }

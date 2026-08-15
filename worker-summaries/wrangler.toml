@@ -1,0 +1,8 @@
+name = "movie-summaries-api"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "movie-summaries"
+database_id = "773d3de3-77d5-4cf3-85f5-a7dcc94531aa"

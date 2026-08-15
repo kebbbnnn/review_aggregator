@@ -7,18 +7,24 @@ import (
 	"time"
 )
 
-// MovieDocument represents the complete persisted movie review and summary record.
+// MovieDocument represents the complete persisted movie metadata and catalog record (DB1).
 type MovieDocument struct {
-	ID                  string    `json:"id"`
-	TMDBID              int       `json:"tmdb_id"`
-	IMDbID              string    `json:"imdb_id,omitempty"`
-	Title               string    `json:"title"`
-	ReleaseDate         time.Time `json:"release_date"`
-	PosterURL           string    `json:"poster_url,omitempty"`
-	Overview            string    `json:"overview,omitempty"`
-	Genres              []string  `json:"genres,omitempty"`
-	IMDbScore           *float64  `json:"imdb_score,omitempty"`
-	RottenTomatoes      *int      `json:"rotten_tomatoes,omitempty"`
+	ID             string    `json:"id"`
+	TMDBID         int       `json:"tmdb_id"`
+	IMDbID         string    `json:"imdb_id,omitempty"`
+	Title          string    `json:"title"`
+	ReleaseDate    time.Time `json:"release_date"`
+	PosterURL      string    `json:"poster_url,omitempty"`
+	Overview       string    `json:"overview,omitempty"`
+	Genres         []string  `json:"genres,omitempty"`
+	IMDbScore      *float64  `json:"imdb_score,omitempty"`
+	RottenTomatoes *int      `json:"rotten_tomatoes,omitempty"`
+	LastUpdated    time.Time `json:"last_updated"`
+}
+
+// SummaryDocument represents the persisted movie review and summary record (DB2).
+type SummaryDocument struct {
+	MovieID             string    `json:"movie_id"`
 	OverallSentiment    *int      `json:"overall_sentiment,omitempty"`
 	AudienceConsensus   string    `json:"audience_consensus,omitempty"`
 	Recommendation      string    `json:"recommendation,omitempty"`
@@ -29,12 +35,12 @@ type MovieDocument struct {
 	LastUpdated         time.Time `json:"last_updated"`
 }
 
-// HasSummary returns true if the document contains a generated LLM summary.
-func (d *MovieDocument) HasSummary() bool {
-	if d == nil {
+// HasContent returns true if the summary document contains meaningful summary data.
+func (s *SummaryDocument) HasContent() bool {
+	if s == nil {
 		return false
 	}
-	return d.OverallSentiment != nil || d.AudienceConsensus != "" || d.Recommendation != "" || len(d.Pros) > 0 || len(d.Cons) > 0 || len(d.Themes) > 0
+	return s.OverallSentiment != nil || s.AudienceConsensus != "" || s.Recommendation != "" || len(s.Pros) > 0 || len(s.Cons) > 0 || len(s.Themes) > 0
 }
 
 // ParseIMDbScore extracts a numeric float from strings like "7.8" or "7.8/10".
@@ -70,11 +76,22 @@ func ParseRottenTomatoesScore(raw string) *int {
 	return &val
 }
 
-// Store defines persistence operations for movies.
-type Store interface {
+// MetadataStore defines persistence operations for movie metadata (DB1).
+type MetadataStore interface {
 	SaveMovie(ctx context.Context, doc *MovieDocument) error
 	SaveMovieBatch(ctx context.Context, docs []*MovieDocument) error
 	GetMovie(ctx context.Context, id string) (*MovieDocument, bool, error)
 	MovieExists(ctx context.Context, id string) (bool, error)
 	Close() error
 }
+
+// SummaryStore defines persistence operations for movie summaries (DB2).
+type SummaryStore interface {
+	SaveSummary(ctx context.Context, doc *SummaryDocument) error
+	GetSummary(ctx context.Context, movieID string) (*SummaryDocument, bool, error)
+	SummaryExists(ctx context.Context, movieID string) (bool, error)
+	Close() error
+}
+
+// Store is an alias for MetadataStore for backward-compatibility.
+type Store = MetadataStore

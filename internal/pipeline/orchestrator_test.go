@@ -49,23 +49,23 @@ func (m *mockLLMClient) SummarizeMovie(ctx context.Context, title, overview stri
 	return m.result, nil
 }
 
-type mockStore struct {
+type mockMetadataStore struct {
 	mu     sync.Mutex
 	movies map[string]*store.MovieDocument
 }
 
-func newMockStore() *mockStore {
-	return &mockStore{movies: make(map[string]*store.MovieDocument)}
+func newMockMetadataStore() *mockMetadataStore {
+	return &mockMetadataStore{movies: make(map[string]*store.MovieDocument)}
 }
 
-func (m *mockStore) SaveMovie(ctx context.Context, doc *store.MovieDocument) error {
+func (m *mockMetadataStore) SaveMovie(ctx context.Context, doc *store.MovieDocument) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.movies[doc.ID] = doc
 	return nil
 }
 
-func (m *mockStore) SaveMovieBatch(ctx context.Context, docs []*store.MovieDocument) error {
+func (m *mockMetadataStore) SaveMovieBatch(ctx context.Context, docs []*store.MovieDocument) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, doc := range docs {
@@ -74,21 +74,53 @@ func (m *mockStore) SaveMovieBatch(ctx context.Context, docs []*store.MovieDocum
 	return nil
 }
 
-func (m *mockStore) GetMovie(ctx context.Context, id string) (*store.MovieDocument, bool, error) {
+func (m *mockMetadataStore) GetMovie(ctx context.Context, id string) (*store.MovieDocument, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	doc, ok := m.movies[id]
 	return doc, ok, nil
 }
 
-func (m *mockStore) MovieExists(ctx context.Context, id string) (bool, error) {
+func (m *mockMetadataStore) MovieExists(ctx context.Context, id string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	_, ok := m.movies[id]
 	return ok, nil
 }
 
-func (m *mockStore) Close() error { return nil }
+func (m *mockMetadataStore) Close() error { return nil }
+
+type mockSummaryStore struct {
+	mu        sync.Mutex
+	summaries map[string]*store.SummaryDocument
+}
+
+func newMockSummaryStore() *mockSummaryStore {
+	return &mockSummaryStore{summaries: make(map[string]*store.SummaryDocument)}
+}
+
+func (m *mockSummaryStore) SaveSummary(ctx context.Context, doc *store.SummaryDocument) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.summaries[doc.MovieID] = doc
+	return nil
+}
+
+func (m *mockSummaryStore) GetSummary(ctx context.Context, movieID string) (*store.SummaryDocument, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	doc, ok := m.summaries[movieID]
+	return doc, ok, nil
+}
+
+func (m *mockSummaryStore) SummaryExists(ctx context.Context, movieID string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.summaries[movieID]
+	return ok, nil
+}
+
+func (m *mockSummaryStore) Close() error { return nil }
 
 func ptrInt(i int) *int { return &i }
 
@@ -102,15 +134,21 @@ func TestOrchestrator_SkipSummaryForExistingMovie(t *testing.T) {
 
 	movieID := discovery.FormatTMDBID(movie.TMDBID)
 
-	st := newMockStore()
-	st.movies[movieID] = &store.MovieDocument{
-		ID:                  movieID,
-		TMDBID:              movie.TMDBID,
-		Title:               movie.Title,
+	metaStore := newMockMetadataStore()
+	metaStore.movies[movieID] = &store.MovieDocument{
+		ID:          movieID,
+		TMDBID:      movie.TMDBID,
+		Title:       movie.Title,
+		LastUpdated: time.Now().Add(-25 * time.Hour), // Older than 24h
+	}
+
+	sumStore := newMockSummaryStore()
+	sumStore.summaries[movieID] = &store.SummaryDocument{
+		MovieID:             movieID,
 		OverallSentiment:    ptrInt(85),
 		AudienceConsensus:   "Already summarized consensus",
 		ReviewCountAnalyzed: 10,
-		LastUpdated:         time.Now().Add(-25 * time.Hour), // Older than 24h
+		LastUpdated:         time.Now().Add(-25 * time.Hour),
 	}
 
 	disc := &mockDiscoverer{movies: []discovery.Movie{movie}}
@@ -118,7 +156,7 @@ func TestOrchestrator_SkipSummaryForExistingMovie(t *testing.T) {
 	llmCl := &mockLLMClient{result: &llm.SummaryResponse{OverallSentiment: 99}}
 	proc := processor.NewProcessor(3, 30)
 
-	orc := pipeline.NewOrchestrator(disc, nil, []collector.Collector{coll}, proc, llmCl, st)
+	orc := pipeline.NewOrchestrator(disc, nil, []collector.Collector{coll}, proc, llmCl, metaStore, sumStore)
 
 	res, err := orc.Run(context.Background(), 10)
 	if err != nil {
@@ -139,15 +177,17 @@ func TestOrchestrator_SkipSummaryForExistingMovie(t *testing.T) {
 		t.Errorf("expected 0 collector calls, got %d", coll.calls)
 	}
 
-	savedDoc := st.movies[movieID]
+	savedDoc := metaStore.movies[movieID]
 	if savedDoc == nil {
-		t.Fatalf("expected movie doc to be saved")
+		t.Fatalf("expected movie doc to be saved in metaStore")
 	}
-	if savedDoc.AudienceConsensus != "Already summarized consensus" {
-		t.Errorf("expected summary to be preserved, got %s", savedDoc.AudienceConsensus)
+
+	savedSum := sumStore.summaries[movieID]
+	if savedSum == nil {
+		t.Fatalf("expected summary to be preserved in sumStore")
 	}
-	if savedDoc.ReviewCountAnalyzed != 10 {
-		t.Errorf("expected review count 10, got %d", savedDoc.ReviewCountAnalyzed)
+	if savedSum.AudienceConsensus != "Already summarized consensus" {
+		t.Errorf("expected summary to be preserved, got %s", savedSum.AudienceConsensus)
 	}
 }
 
@@ -161,17 +201,21 @@ func TestOrchestrator_GenerateSummaryForMovieWithoutExistingSummary(t *testing.T
 
 	movieID := discovery.FormatTMDBID(movie.TMDBID)
 
-	st := newMockStore()
+	metaStore := newMockMetadataStore()
+	sumStore := newMockSummaryStore()
 	disc := &mockDiscoverer{movies: []discovery.Movie{movie}}
 	coll := &mockCollector{reviews: []collector.Review{{ID: "r1", Content: "Great movie!"}}}
 	newSummary := &llm.SummaryResponse{
 		OverallSentiment:  90,
 		AudienceConsensus: "Newly generated consensus",
+		Pros:              []string{"Visuals"},
+		Cons:              []string{"Pacing"},
+		CommonThemes:      []string{"Heroism"},
 	}
 	llmCl := &mockLLMClient{result: newSummary}
 	proc := processor.NewProcessor(3, 30)
 
-	orc := pipeline.NewOrchestrator(disc, nil, []collector.Collector{coll}, proc, llmCl, st)
+	orc := pipeline.NewOrchestrator(disc, nil, []collector.Collector{coll}, proc, llmCl, metaStore, sumStore)
 
 	res, err := orc.Run(context.Background(), 10)
 	if err != nil {
@@ -189,12 +233,23 @@ func TestOrchestrator_GenerateSummaryForMovieWithoutExistingSummary(t *testing.T
 		t.Errorf("expected 1 collector call, got %d", coll.calls)
 	}
 
-	savedDoc := st.movies[movieID]
+	savedDoc := metaStore.movies[movieID]
 	if savedDoc == nil {
-		t.Fatalf("expected movie doc to be saved")
+		t.Fatalf("expected movie doc to be saved in metaStore")
 	}
-	if savedDoc.AudienceConsensus != "Newly generated consensus" {
-		t.Errorf("expected new summary, got %s", savedDoc.AudienceConsensus)
+	if savedDoc.Title != "New Movie" {
+		t.Errorf("expected title 'New Movie', got %s", savedDoc.Title)
+	}
+
+	savedSum := sumStore.summaries[movieID]
+	if savedSum == nil {
+		t.Fatalf("expected summary to be saved in sumStore")
+	}
+	if savedSum.AudienceConsensus != "Newly generated consensus" {
+		t.Errorf("expected new summary, got %s", savedSum.AudienceConsensus)
+	}
+	if len(savedSum.Pros) != 1 || savedSum.Pros[0] != "Visuals" {
+		t.Errorf("expected pros ['Visuals'], got %v", savedSum.Pros)
 	}
 }
 
@@ -206,13 +261,19 @@ func TestOrchestrator_FreshnessCheckSkipsMovie(t *testing.T) {
 	}
 
 	movieID := discovery.FormatTMDBID(movie.TMDBID)
-	st := newMockStore()
-	st.movies[movieID] = &store.MovieDocument{
-		ID:               movieID,
-		TMDBID:           movie.TMDBID,
-		Title:            movie.Title,
+	metaStore := newMockMetadataStore()
+	metaStore.movies[movieID] = &store.MovieDocument{
+		ID:          movieID,
+		TMDBID:      movie.TMDBID,
+		Title:       movie.Title,
+		LastUpdated: time.Now().Add(-1 * time.Hour), // Fresh (< 24h)
+	}
+
+	sumStore := newMockSummaryStore()
+	sumStore.summaries[movieID] = &store.SummaryDocument{
+		MovieID:          movieID,
 		OverallSentiment: ptrInt(80),
-		LastUpdated:      time.Now().Add(-1 * time.Hour), // Fresh (< 24h)
+		LastUpdated:      time.Now().Add(-1 * time.Hour),
 	}
 
 	disc := &mockDiscoverer{movies: []discovery.Movie{movie}}
@@ -220,7 +281,7 @@ func TestOrchestrator_FreshnessCheckSkipsMovie(t *testing.T) {
 	llmCl := &mockLLMClient{}
 	proc := processor.NewProcessor(3, 30)
 
-	orc := pipeline.NewOrchestrator(disc, nil, []collector.Collector{coll}, proc, llmCl, st)
+	orc := pipeline.NewOrchestrator(disc, nil, []collector.Collector{coll}, proc, llmCl, metaStore, sumStore)
 
 	res, err := orc.Run(context.Background(), 10)
 	if err != nil {

@@ -40,6 +40,14 @@ func NewD1Store(accountID, databaseID, apiToken string) (*D1Store, error) {
 	}, nil
 }
 
+func NewMetadataStore(accountID, databaseID, apiToken string) (MetadataStore, error) {
+	return NewD1Store(accountID, databaseID, apiToken)
+}
+
+func NewSummaryStore(accountID, databaseID, apiToken string) (SummaryStore, error) {
+	return NewD1Store(accountID, databaseID, apiToken)
+}
+
 type d1QueryItem struct {
 	SQL    string `json:"sql"`
 	Params []any  `json:"params,omitempty"`
@@ -65,6 +73,10 @@ type d1APIResponse struct {
 	Errors  []d1APIError        `json:"errors"`
 }
 
+// -------------------------------------------------------------
+// MetadataStore Implementation (DB1: Movies & Genres)
+// -------------------------------------------------------------
+
 func (s *D1Store) SaveMovie(ctx context.Context, doc *MovieDocument) error {
 	if s.httpClient == nil {
 		log.Printf("[MOCK STORE] SaveMovie: %s (TMDB ID: %d)", doc.Title, doc.TMDBID)
@@ -82,26 +94,17 @@ func (s *D1Store) SaveMovie(ctx context.Context, doc *MovieDocument) error {
 
 	var batch []d1QueryItem
 
-	// 1. Delete existing related child rows
+	// 1. Delete existing genres
 	batch = append(batch, d1QueryItem{
 		SQL:    "DELETE FROM movie_genres WHERE movie_id = ?;",
-		Params: []any{doc.ID},
-	})
-	batch = append(batch, d1QueryItem{
-		SQL:    "DELETE FROM movie_points WHERE movie_id = ?;",
-		Params: []any{doc.ID},
-	})
-	batch = append(batch, d1QueryItem{
-		SQL:    "DELETE FROM movie_themes WHERE movie_id = ?;",
 		Params: []any{doc.ID},
 	})
 
 	// 2. Insert or replace movie row
 	upsertSQL := `INSERT INTO movies (
 		id, tmdb_id, imdb_id, title, release_date, poster_url, overview,
-		imdb_score, rotten_tomatoes, overall_sentiment, audience_consensus, recommendation,
-		review_count, last_updated
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		imdb_score, rotten_tomatoes, last_updated
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		tmdb_id=excluded.tmdb_id,
 		imdb_id=excluded.imdb_id,
@@ -111,10 +114,6 @@ func (s *D1Store) SaveMovie(ctx context.Context, doc *MovieDocument) error {
 		overview=excluded.overview,
 		imdb_score=excluded.imdb_score,
 		rotten_tomatoes=excluded.rotten_tomatoes,
-		overall_sentiment=excluded.overall_sentiment,
-		audience_consensus=excluded.audience_consensus,
-		recommendation=excluded.recommendation,
-		review_count=excluded.review_count,
 		last_updated=excluded.last_updated;`
 
 	batch = append(batch, d1QueryItem{
@@ -129,10 +128,6 @@ func (s *D1Store) SaveMovie(ctx context.Context, doc *MovieDocument) error {
 			doc.Overview,
 			doc.IMDbScore,
 			doc.RottenTomatoes,
-			doc.OverallSentiment,
-			doc.AudienceConsensus,
-			doc.Recommendation,
-			doc.ReviewCountAnalyzed,
 			lastUpdatedStr,
 		},
 	})
@@ -145,37 +140,6 @@ func (s *D1Store) SaveMovie(ctx context.Context, doc *MovieDocument) error {
 		batch = append(batch, d1QueryItem{
 			SQL:    "INSERT OR IGNORE INTO movie_genres (movie_id, genre) VALUES (?, ?);",
 			Params: []any{doc.ID, genre},
-		})
-	}
-
-	// 4. Insert pros & cons into movie_points
-	for _, pro := range doc.Pros {
-		if pro == "" {
-			continue
-		}
-		batch = append(batch, d1QueryItem{
-			SQL:    "INSERT INTO movie_points (movie_id, type, content) VALUES (?, 'pro', ?);",
-			Params: []any{doc.ID, pro},
-		})
-	}
-	for _, con := range doc.Cons {
-		if con == "" {
-			continue
-		}
-		batch = append(batch, d1QueryItem{
-			SQL:    "INSERT INTO movie_points (movie_id, type, content) VALUES (?, 'con', ?);",
-			Params: []any{doc.ID, con},
-		})
-	}
-
-	// 5. Insert themes
-	for _, theme := range doc.Themes {
-		if theme == "" {
-			continue
-		}
-		batch = append(batch, d1QueryItem{
-			SQL:    "INSERT INTO movie_themes (movie_id, theme) VALUES (?, ?);",
-			Params: []any{doc.ID, theme},
 		})
 	}
 
@@ -204,9 +168,8 @@ func (s *D1Store) SaveMovieBatch(ctx context.Context, docs []*MovieDocument) err
 
 	upsertSQL := `INSERT INTO movies (
 		id, tmdb_id, imdb_id, title, release_date, poster_url, overview,
-		imdb_score, rotten_tomatoes, overall_sentiment, audience_consensus, recommendation,
-		review_count, last_updated
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		imdb_score, rotten_tomatoes, last_updated
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		tmdb_id=excluded.tmdb_id,
 		imdb_id=excluded.imdb_id,
@@ -216,10 +179,6 @@ func (s *D1Store) SaveMovieBatch(ctx context.Context, docs []*MovieDocument) err
 		overview=excluded.overview,
 		imdb_score=excluded.imdb_score,
 		rotten_tomatoes=excluded.rotten_tomatoes,
-		overall_sentiment=excluded.overall_sentiment,
-		audience_consensus=excluded.audience_consensus,
-		recommendation=excluded.recommendation,
-		review_count=excluded.review_count,
 		last_updated=excluded.last_updated;`
 
 	for _, doc := range docs {
@@ -249,10 +208,6 @@ func (s *D1Store) SaveMovieBatch(ctx context.Context, docs []*MovieDocument) err
 				doc.Overview,
 				doc.IMDbScore,
 				doc.RottenTomatoes,
-				doc.OverallSentiment,
-				doc.AudienceConsensus,
-				doc.Recommendation,
-				doc.ReviewCountAnalyzed,
 				lastUpdatedStr,
 			},
 		})
@@ -316,19 +271,11 @@ func (s *D1Store) GetMovie(ctx context.Context, id string) (*MovieDocument, bool
 
 	batch := []d1QueryItem{
 		{
-			SQL:    "SELECT id, tmdb_id, imdb_id, title, release_date, poster_url, overview, imdb_score, rotten_tomatoes, overall_sentiment, audience_consensus, recommendation, review_count, last_updated FROM movies WHERE id = ? LIMIT 1;",
+			SQL:    "SELECT id, tmdb_id, imdb_id, title, release_date, poster_url, overview, imdb_score, rotten_tomatoes, last_updated FROM movies WHERE id = ? LIMIT 1;",
 			Params: []any{id},
 		},
 		{
 			SQL:    "SELECT genre FROM movie_genres WHERE movie_id = ?;",
-			Params: []any{id},
-		},
-		{
-			SQL:    "SELECT type, content FROM movie_points WHERE movie_id = ?;",
-			Params: []any{id},
-		},
-		{
-			SQL:    "SELECT theme FROM movie_themes WHERE movie_id = ?;",
 			Params: []any{id},
 		},
 	}
@@ -354,9 +301,132 @@ func (s *D1Store) GetMovie(ctx context.Context, id string) (*MovieDocument, bool
 		}
 	}
 
+	return doc, true, nil
+}
+
+// -------------------------------------------------------------
+// SummaryStore Implementation (DB2: Summaries, Points, Themes)
+// -------------------------------------------------------------
+
+func (s *D1Store) SaveSummary(ctx context.Context, doc *SummaryDocument) error {
+	if s.httpClient == nil {
+		log.Printf("[MOCK STORE] SaveSummary: movie %s", doc.MovieID)
+		return nil
+	}
+
+	now := time.Now().UTC()
+	doc.LastUpdated = now
+	lastUpdatedStr := now.Format(time.RFC3339)
+
+	var batch []d1QueryItem
+
+	// 1. Delete existing points and themes
+	batch = append(batch, d1QueryItem{
+		SQL:    "DELETE FROM movie_points WHERE movie_id = ?;",
+		Params: []any{doc.MovieID},
+	})
+	batch = append(batch, d1QueryItem{
+		SQL:    "DELETE FROM movie_themes WHERE movie_id = ?;",
+		Params: []any{doc.MovieID},
+	})
+
+	// 2. Upsert summary row
+	upsertSQL := `INSERT INTO movie_summaries (
+		movie_id, overall_sentiment, audience_consensus, recommendation, review_count, last_updated
+	) VALUES (?, ?, ?, ?, ?, ?)
+	ON CONFLICT(movie_id) DO UPDATE SET
+		overall_sentiment=excluded.overall_sentiment,
+		audience_consensus=excluded.audience_consensus,
+		recommendation=excluded.recommendation,
+		review_count=excluded.review_count,
+		last_updated=excluded.last_updated;`
+
+	batch = append(batch, d1QueryItem{
+		SQL: upsertSQL,
+		Params: []any{
+			doc.MovieID,
+			doc.OverallSentiment,
+			doc.AudienceConsensus,
+			doc.Recommendation,
+			doc.ReviewCountAnalyzed,
+			lastUpdatedStr,
+		},
+	})
+
+	// 3. Insert pros & cons
+	for _, pro := range doc.Pros {
+		if pro == "" {
+			continue
+		}
+		batch = append(batch, d1QueryItem{
+			SQL:    "INSERT INTO movie_points (movie_id, type, content) VALUES (?, 'pro', ?);",
+			Params: []any{doc.MovieID, pro},
+		})
+	}
+	for _, con := range doc.Cons {
+		if con == "" {
+			continue
+		}
+		batch = append(batch, d1QueryItem{
+			SQL:    "INSERT INTO movie_points (movie_id, type, content) VALUES (?, 'con', ?);",
+			Params: []any{doc.MovieID, con},
+		})
+	}
+
+	// 4. Insert themes
+	for _, theme := range doc.Themes {
+		if theme == "" {
+			continue
+		}
+		batch = append(batch, d1QueryItem{
+			SQL:    "INSERT INTO movie_themes (movie_id, theme) VALUES (?, ?);",
+			Params: []any{doc.MovieID, theme},
+		})
+	}
+
+	_, err := s.executeBatch(ctx, batch)
+	if err != nil {
+		return fmt.Errorf("saving summary for movie %s to D1: %w", doc.MovieID, err)
+	}
+
+	return nil
+}
+
+func (s *D1Store) GetSummary(ctx context.Context, movieID string) (*SummaryDocument, bool, error) {
+	if s.httpClient == nil {
+		return nil, false, nil
+	}
+
+	batch := []d1QueryItem{
+		{
+			SQL:    "SELECT movie_id, overall_sentiment, audience_consensus, recommendation, review_count, last_updated FROM movie_summaries WHERE movie_id = ? LIMIT 1;",
+			Params: []any{movieID},
+		},
+		{
+			SQL:    "SELECT type, content FROM movie_points WHERE movie_id = ?;",
+			Params: []any{movieID},
+		},
+		{
+			SQL:    "SELECT theme FROM movie_themes WHERE movie_id = ?;",
+			Params: []any{movieID},
+		},
+	}
+
+	resp, err := s.executeBatch(ctx, batch)
+	if err != nil {
+		return nil, false, fmt.Errorf("getting summary %s from D1: %w", movieID, err)
+	}
+
+	if len(resp.Result) == 0 || len(resp.Result[0].Results) == 0 {
+		return nil, false, nil
+	}
+
+	row := resp.Result[0].Results[0]
+	doc := parseSummaryRow(row)
+
 	// Points (Pros / Cons)
-	if len(resp.Result) > 2 {
-		for _, pRow := range resp.Result[2].Results {
+	if len(resp.Result) > 1 {
+		for _, pRow := range resp.Result[1].Results {
 			pType, _ := pRow["type"].(string)
 			pContent, _ := pRow["content"].(string)
 			if pContent == "" {
@@ -371,8 +441,8 @@ func (s *D1Store) GetMovie(ctx context.Context, id string) (*MovieDocument, bool
 	}
 
 	// Themes
-	if len(resp.Result) > 3 {
-		for _, tRow := range resp.Result[3].Results {
+	if len(resp.Result) > 2 {
+		for _, tRow := range resp.Result[2].Results {
 			if t, ok := tRow["theme"].(string); ok && t != "" {
 				doc.Themes = append(doc.Themes, t)
 			}
@@ -380,6 +450,30 @@ func (s *D1Store) GetMovie(ctx context.Context, id string) (*MovieDocument, bool
 	}
 
 	return doc, true, nil
+}
+
+func (s *D1Store) SummaryExists(ctx context.Context, movieID string) (bool, error) {
+	if s.httpClient == nil {
+		return false, nil
+	}
+
+	batch := []d1QueryItem{
+		{
+			SQL:    "SELECT movie_id FROM movie_summaries WHERE movie_id = ? LIMIT 1;",
+			Params: []any{movieID},
+		},
+	}
+
+	resp, err := s.executeBatch(ctx, batch)
+	if err != nil {
+		return false, fmt.Errorf("checking summary exists %s in D1: %w", movieID, err)
+	}
+
+	if len(resp.Result) == 0 || len(resp.Result[0].Results) == 0 {
+		return false, nil
+	}
+
+	return true, nil
 }
 
 func (s *D1Store) Close() error {
@@ -467,6 +561,21 @@ func parseMovieRow(row map[string]any) *MovieDocument {
 	if v, ok := row["rotten_tomatoes"].(float64); ok {
 		val := int(v)
 		doc.RottenTomatoes = &val
+	}
+	if v, ok := row["last_updated"].(string); ok && v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			doc.LastUpdated = t
+		}
+	}
+
+	return doc
+}
+
+func parseSummaryRow(row map[string]any) *SummaryDocument {
+	doc := &SummaryDocument{}
+
+	if v, ok := row["movie_id"].(string); ok {
+		doc.MovieID = v
 	}
 	if v, ok := row["overall_sentiment"].(float64); ok {
 		val := int(v)

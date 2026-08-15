@@ -15,7 +15,7 @@ import (
 )
 
 func main() {
-	log.Println("[INFO] Starting Movie Review Aggregator Pipeline...")
+	log.Println("[INFO] Starting Movie Review Aggregator Pipeline (Dual DB Architecture)...")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -24,11 +24,17 @@ func main() {
 
 	ctx := context.Background()
 
-	st, err := store.NewD1Store(cfg.CFAccountID, cfg.CFD1DatabaseID, cfg.CFAPIToken)
+	metaStore, err := store.NewMetadataStore(cfg.CFAccountID, cfg.CFD1DatabaseID, cfg.CFAPIToken)
 	if err != nil {
-		log.Fatalf("[FATAL] D1 store init failed: %v", err)
+		log.Fatalf("[FATAL] DB1 metadata store init failed: %v", err)
 	}
-	defer st.Close()
+	defer metaStore.Close()
+
+	summaryStore, err := store.NewSummaryStore(cfg.CFSummaryAccountID, cfg.CFSummaryDatabaseID, cfg.CFSummaryAPIToken)
+	if err != nil {
+		log.Fatalf("[FATAL] DB2 summary store init failed: %v", err)
+	}
+	defer summaryStore.Close()
 
 	tmdb := discovery.NewTMDBClient(cfg.TMDBAPIKey)
 	omdb := discovery.NewOMDBClient(cfg.OMDBAPIKey)
@@ -48,7 +54,7 @@ func main() {
 		llmClient = llm.NewClient(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel)
 	}
 
-	orchestrator := pipeline.NewOrchestrator(discoverer, omdb, collectors, proc, llmClient, st)
+	orchestrator := pipeline.NewOrchestrator(discoverer, omdb, collectors, proc, llmClient, metaStore, summaryStore)
 
 	result, err := orchestrator.Run(ctx, cfg.MaxMoviesPerSync)
 	if err != nil {

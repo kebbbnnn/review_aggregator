@@ -87,7 +87,6 @@ func TestD1Store_SaveAndGetMovie(t *testing.T) {
 					{Success: true},
 					{Success: true},
 					{Success: true},
-					{Success: true},
 				},
 			})
 			return
@@ -102,20 +101,16 @@ func TestD1Store_SaveAndGetMovie(t *testing.T) {
 					Success: true,
 					Results: []map[string]any{
 						{
-							"id":                 "tmdb_100",
-							"tmdb_id":            float64(100),
-							"imdb_id":            "tt0100",
-							"title":              "Test Movie",
-							"release_date":       "2025-07-11T00:00:00Z",
-							"poster_url":         "https://example.com/poster.jpg",
-							"overview":           "Test overview",
-							"imdb_score":         float64(8.2),
-							"rotten_tomatoes":    float64(88),
-							"overall_sentiment":  float64(90),
-							"audience_consensus": "Great test movie",
-							"recommendation":     "Must watch",
-							"review_count":       float64(15),
-							"last_updated":       "2026-08-10T12:00:00Z",
+							"id":              "tmdb_100",
+							"tmdb_id":         float64(100),
+							"imdb_id":         "tt0100",
+							"title":           "Test Movie",
+							"release_date":    "2025-07-11T00:00:00Z",
+							"poster_url":      "https://example.com/poster.jpg",
+							"overview":        "Test overview",
+							"imdb_score":      float64(8.2),
+							"rotten_tomatoes": float64(88),
+							"last_updated":    "2026-08-10T12:00:00Z",
 						},
 					},
 				},
@@ -124,19 +119,6 @@ func TestD1Store_SaveAndGetMovie(t *testing.T) {
 					Results: []map[string]any{
 						{"genre": "Action"},
 						{"genre": "Sci-Fi"},
-					},
-				},
-				{
-					Success: true,
-					Results: []map[string]any{
-						{"type": "pro", "content": "Great visuals"},
-						{"type": "con", "content": "Pacing issues"},
-					},
-				},
-				{
-					Success: true,
-					Results: []map[string]any{
-						{"theme": "Identity"},
 					},
 				},
 			},
@@ -153,23 +135,16 @@ func TestD1Store_SaveAndGetMovie(t *testing.T) {
 	}
 
 	doc := &MovieDocument{
-		ID:                  "tmdb_100",
-		TMDBID:              100,
-		IMDbID:              "tt0100",
-		Title:               "Test Movie",
-		ReleaseDate:         time.Date(2025, 7, 11, 0, 0, 0, 0, time.UTC),
-		PosterURL:           "https://example.com/poster.jpg",
-		Overview:            "Test overview",
-		Genres:              []string{"Action", "Sci-Fi"},
-		IMDbScore:           ptrFloat(8.2),
-		RottenTomatoes:      ptrInt(88),
-		OverallSentiment:    ptrInt(90),
-		AudienceConsensus:   "Great test movie",
-		Recommendation:      "Must watch",
-		Pros:                []string{"Great visuals"},
-		Cons:                []string{"Pacing issues"},
-		Themes:              []string{"Identity"},
-		ReviewCountAnalyzed: 15,
+		ID:             "tmdb_100",
+		TMDBID:         100,
+		IMDbID:         "tt0100",
+		Title:          "Test Movie",
+		ReleaseDate:    time.Date(2025, 7, 11, 0, 0, 0, 0, time.UTC),
+		PosterURL:      "https://example.com/poster.jpg",
+		Overview:       "Test overview",
+		Genres:         []string{"Action", "Sci-Fi"},
+		IMDbScore:      ptrFloat(8.2),
+		RottenTomatoes: ptrInt(88),
 	}
 
 	// Test SaveMovie
@@ -197,20 +172,125 @@ func TestD1Store_SaveAndGetMovie(t *testing.T) {
 	if len(gotDoc.Genres) != 2 || gotDoc.Genres[0] != "Action" {
 		t.Errorf("Expected genres [Action, Sci-Fi], got %v", gotDoc.Genres)
 	}
-	if len(gotDoc.Pros) != 1 || gotDoc.Pros[0] != "Great visuals" {
-		t.Errorf("Expected pros ['Great visuals'], got %v", gotDoc.Pros)
-	}
-	if len(gotDoc.Cons) != 1 || gotDoc.Cons[0] != "Pacing issues" {
-		t.Errorf("Expected cons ['Pacing issues'], got %v", gotDoc.Cons)
-	}
-	if len(gotDoc.Themes) != 1 || gotDoc.Themes[0] != "Identity" {
-		t.Errorf("Expected themes ['Identity'], got %v", gotDoc.Themes)
-	}
 	if gotDoc.IMDbScore == nil || *gotDoc.IMDbScore != 8.2 {
 		t.Errorf("Expected IMDbScore 8.2, got %v", gotDoc.IMDbScore)
 	}
 	if gotDoc.RottenTomatoes == nil || *gotDoc.RottenTomatoes != 88 {
 		t.Errorf("Expected RottenTomatoes 88, got %v", gotDoc.RottenTomatoes)
+	}
+}
+
+func TestD1Store_SaveAndGetSummary(t *testing.T) {
+	var receivedBatch []d1QueryItem
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req d1BatchRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Bad Request", http.StatusBadRequest)
+			return
+		}
+		receivedBatch = req.Batch
+
+		if len(req.Batch) > 0 && req.Batch[0].SQL == "DELETE FROM movie_points WHERE movie_id = ?;" {
+			// Save summary response
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(d1APIResponse{
+				Success: true,
+				Result: []d1StatementResult{
+					{Success: true},
+					{Success: true},
+					{Success: true},
+					{Success: true},
+					{Success: true},
+					{Success: true},
+				},
+			})
+			return
+		}
+
+		// Get summary response
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(d1APIResponse{
+			Success: true,
+			Result: []d1StatementResult{
+				{
+					Success: true,
+					Results: []map[string]any{
+						{
+							"movie_id":           "tmdb_100",
+							"overall_sentiment":  float64(92),
+							"audience_consensus": "Outstanding performance and visuals",
+							"recommendation":     "Highly recommended",
+							"review_count":       float64(24),
+							"last_updated":       "2026-08-15T12:00:00Z",
+						},
+					},
+				},
+				{
+					Success: true,
+					Results: []map[string]any{
+						{"type": "pro", "content": "Cinematography"},
+						{"type": "con", "content": "Runtime"},
+					},
+				},
+				{
+					Success: true,
+					Results: []map[string]any{
+						{"theme": "Redemption"},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	store := &D1Store{
+		accountID:  "acc-sum-123",
+		databaseID: "db-sum-456",
+		apiToken:   "test-token",
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+	}
+
+	sumDoc := &SummaryDocument{
+		MovieID:             "tmdb_100",
+		OverallSentiment:    ptrInt(92),
+		AudienceConsensus:   "Outstanding performance and visuals",
+		Recommendation:      "Highly recommended",
+		Pros:                []string{"Cinematography"},
+		Cons:                []string{"Runtime"},
+		Themes:              []string{"Redemption"},
+		ReviewCountAnalyzed: 24,
+	}
+
+	err := store.SaveSummary(context.Background(), sumDoc)
+	if err != nil {
+		t.Fatalf("SaveSummary failed: %v", err)
+	}
+
+	if len(receivedBatch) == 0 {
+		t.Errorf("Expected non-empty batch in SaveSummary")
+	}
+
+	gotSummary, found, err := store.GetSummary(context.Background(), "tmdb_100")
+	if err != nil {
+		t.Fatalf("GetSummary failed: %v", err)
+	}
+	if !found || gotSummary == nil {
+		t.Fatalf("Expected summary to be found")
+	}
+
+	if gotSummary.OverallSentiment == nil || *gotSummary.OverallSentiment != 92 {
+		t.Errorf("Expected sentiment 92, got %v", gotSummary.OverallSentiment)
+	}
+	if len(gotSummary.Pros) != 1 || gotSummary.Pros[0] != "Cinematography" {
+		t.Errorf("Expected pros ['Cinematography'], got %v", gotSummary.Pros)
+	}
+	if len(gotSummary.Cons) != 1 || gotSummary.Cons[0] != "Runtime" {
+		t.Errorf("Expected cons ['Runtime'], got %v", gotSummary.Cons)
+	}
+	if len(gotSummary.Themes) != 1 || gotSummary.Themes[0] != "Redemption" {
+		t.Errorf("Expected themes ['Redemption'], got %v", gotSummary.Themes)
 	}
 }
 

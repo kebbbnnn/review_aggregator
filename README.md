@@ -13,9 +13,10 @@ A lightweight **Cloudflare Worker** serves consumer-facing read APIs globally at
 * **Multi-Source Review Collection**: Concurrently gathers audience posts and reviews using Reddit's OAuth2 API (`r/movies`) and Letterboxd public RSS feeds (`golang.org/x/sync/errgroup`).
 * **Smart Preprocessing**: Cleans URLs, filters out short/junk comments, deduplicates repetitive text blocks, and ranks top reviews to optimize LLM token usage.
 * **Flexible LLM Provider Support**: Generic HTTP client using the standard OpenAI `/v1/chat/completions` API schema — zero code changes to switch between Google Gemini, Groq, OpenRouter, or local models.
-* **Normalized Cloudflare D1 Storage**: Persists movies, genres, pros/cons, and themes in a relational SQLite schema on Cloudflare D1 (5GB free tier).
-* **Edge API via Cloudflare Worker**: Fast, low-latency search, single-movie lookup, and genre/score filtering served via Cloudflare Workers.
-* **Strict $0 Infrastructure**: No always-on servers required. Eliminates Render compute by running the Go pipeline directly on GitHub Actions.
+* **Dual D1 Database Architecture**: Separates full TMDB catalog metadata (`movie-review-aggregator` on Account 1) from rich LLM audience review summaries (`movie-summaries` on Account 2), giving independent 5GB capacity pools (10GB total free tier storage).
+* **Summary Worker with Edge Caching**: Dedicated read-only microservice for LLM summaries on Account 2, queried seamlessly and cached at the edge via Cloudflare Cache API (1-hour TTL).
+* **Graceful Degradation**: If summary services are unreachable or undergoing maintenance, the consumer API continues serving rich catalog metadata without errors.
+* **Migration Tooling**: Includes built-in migration utility (`cmd/migrate_summaries`) to sync and partition data between databases with zero downtime.
 
 ---
 
@@ -55,23 +56,29 @@ A lightweight **Cloudflare Worker** serves consumer-facing read APIs globally at
        ┌──────────────────────────────┐                         │
        │   LLM Client (OpenAI-compat) │                         │
        │   (Structured Summary)       │                         │
-       └──────────────┬───────────────┘                         │
-                      │ writes deep summary                     │ writes metadata
-                      └────────────────────┬────────────────────┘
-                                           ▼
-                               ┌───────────────────────┐
-                               │  Cloudflare D1 (DB)   │
-                               │ (Normalized Schema)   │
-                               └───────────▲───────────┘
-                                           │ native D1 binding
-                               ┌───────────┴───────────┐
-                               │   Cloudflare Worker   │
-                               │     (Edge API)        │
-                               └───────────▲───────────┘
-                                           │ HTTPS requests
-                               ┌───────────┴───────────┐
-                               │  Web / Mobile Clients │
-                               └───────────────────────┘
+       └───────┬──────────────┬───────┘                         │
+writes summary │              │ writes metadata                 │ writes metadata
+               ▼              └────────────────┬────────────────┘
+    ┌───────────────────────┐                  ▼
+    │  Cloudflare D1 (DB2)  │       ┌───────────────────────┐
+    │  (Account 2: Summary) │       │  Cloudflare D1 (DB1)  │
+    └──────────▲────────────┘       │  (Account 1: Catalog) │
+               │ native D1          └──────────▲────────────┘
+    ┌──────────┴────────────┐                  │ native D1
+    │     Summary Worker    │                  │ binding
+    │  (Account 2: Edge API)│                  │
+    └──────────▲────────────┘                  │
+               │ HTTP + Cache                  │
+               └───────────────┬───────────────┘
+                               ▼
+                    ┌─────────────────────┐
+                    │    Primary Worker   │
+                    │ (Account 1: API GW) │
+                    └──────────▲──────────┘
+                               │ HTTPS requests
+                    ┌──────────┴──────────┐
+                    │ CineScope Frontend  │
+                    └─────────────────────┘
 ```
 
 ---
@@ -81,45 +88,59 @@ A lightweight **Cloudflare Worker** serves consumer-facing read APIs globally at
 ```text
 .
 ├── cmd/
-│   ├── catalog/         # Go CLI for full TMDB catalog discovery & backfill
+│   ├── catalog/             # Go CLI for full TMDB catalog discovery & backfill (DB1)
 │   │   └── main.go
-│   └── pipeline/        # Go CLI entrypoint for deep review & LLM sync
+│   ├── pipeline/            # Go CLI for deep review & LLM sync (DB1 + DB2)
+│   │   └── main.go
+│   └── migrate_summaries/   # One-time migration utility from DB1 to DB2
 │       └── main.go
 │
 ├── internal/
-│   ├── catalog/         # Catalog orchestrator, rate limiting, and cursor management
-│   ├── config/          # Environment variables & .env loader
-│   ├── discovery/       # TMDB & OMDb API integrations
-│   ├── collector/       # Review collectors (Reddit OAuth2 API, Letterboxd RSS)
-│   ├── processor/       # Text deduplication, cleaning, and ranking
-│   ├── llm/             # Generic OpenAI-compatible chat completion client
-│   ├── store/           # Cloudflare D1 REST client & data models
-│   └── pipeline/        # Orchestrator tying discovery -> collection -> LLM -> storage
+│   ├── catalog/             # Catalog orchestrator, rate limiting, and cursor management
+│   ├── config/              # Environment variables & .env loader
+│   ├── discovery/           # TMDB & OMDb API integrations
+│   ├── collector/           # Review collectors (Reddit OAuth2 API, Letterboxd RSS)
+│   ├── processor/           # Text deduplication, cleaning, and ranking
+│   ├── llm/                 # Generic OpenAI-compatible chat completion client
+│   ├── store/               # Cloudflare D1 REST client & dual-database storage models
+│   └── pipeline/            # Orchestrator tying discovery -> collection -> LLM -> storage
 │
-├── worker/              # Cloudflare Worker (TypeScript API Gateway)
+├── worker/                  # Primary Cloudflare Worker (Account 1: API Gateway + Edge Cache)
 │   ├── src/
-│   │   ├── index.ts     # Request router & CORS handling
-│   │   ├── db.ts        # D1 query helpers (search, getById, list/filter)
-│   │   └── types.ts     # TypeScript interfaces
-│   ├── schema.sql       # D1 relational database schema
-│   ├── wrangler.toml    # Cloudflare Wrangler configuration
+│   │   ├── index.ts         # Request router & CORS handling
+│   │   ├── db.ts            # DB1 metadata query helpers (search, getById, list)
+│   │   ├── summary-client.ts# Edge-cached client for Summary Worker queries
+│   │   └── types.ts         # TypeScript interfaces
+│   ├── schema.sql           # DB1 schema (movies metadata + genres)
+│   ├── wrangler.toml        # Account 1 Wrangler configuration
+│   ├── package.json
+│   └── tsconfig.json
+│
+├── worker-summaries/        # Summary Cloudflare Worker (Account 2: LLM Summaries Microservice)
+│   ├── src/
+│   │   ├── index.ts         # Summary router with API key authentication
+│   │   ├── db.ts            # DB2 summary query helpers (single & batch)
+│   │   └── types.ts         # TypeScript interfaces
+│   ├── schema.sql           # DB2 schema (summaries, points, themes)
+│   ├── wrangler.toml        # Account 2 Wrangler configuration
 │   ├── package.json
 │   └── tsconfig.json
 │
 ├── .github/
 │   └── workflows/
-│       ├── catalog_sync.yml    # Runs TMDB catalog crawler every 2h on GitHub Actions
-│       ├── scheduled_sync.yml  # Runs deep review pipeline every 6h on GitHub Actions
-│       └── deploy_worker.yml   # Deploys Worker on push to main
+│       ├── catalog_sync.yml          # Runs TMDB catalog crawler every 2h on GitHub Actions
+│       ├── scheduled_sync.yml        # Runs deep review pipeline every 6h on GitHub Actions
+│       ├── deploy_worker.yml         # Deploys Primary Worker to Account 1 on push to main
+│       └── deploy_summary_worker.yml # Deploys Summary Worker to Account 2 on push to main
 │
-├── .env.example         # Template environment variable configuration
+├── .env.example             # Template environment variable configuration
 ├── go.mod
 └── go.sum
 ```
 
 ---
 
-## ⚙️ Environment Variables (Go Pipeline)
+## ⚙️ Environment Variables (Go Pipeline & Workers)
 
 Copy `.env.example` to `.env` and fill in your API credentials:
 
@@ -137,12 +158,18 @@ cp .env.example .env
 | `LLM_BASE_URL` | No | Base URL for OpenAI-compatible LLM endpoint | `https://generativelanguage.googleapis.com/v1beta/openai` |
 | `LLM_API_KEY` | Optional | API key for LLM provider (needed for deep summary) | — |
 | `LLM_MODEL` | No | LLM model identifier | `gemini-2.5-flash` |
-| `CF_ACCOUNT_ID` | **Yes** | Cloudflare Account ID | — |
-| `CF_D1_DATABASE_ID` | **Yes** | Cloudflare D1 Database UUID | — |
+| `CF_ACCOUNT_ID` | **Yes** | Cloudflare Account ID (DB1 / Primary) | — |
+| `CF_D1_DATABASE_ID` | **Yes** | Cloudflare D1 Database UUID (DB1) | — |
 | `CF_API_TOKEN` | **Yes** | Cloudflare API Token with D1 Edit permissions | — |
+| `CF_SUMMARY_ACCOUNT_ID` | Optional | Cloudflare Account ID (DB2: defaults to CF_ACCOUNT_ID) | — |
+| `CF_SUMMARY_DATABASE_ID` | Optional | Cloudflare D1 Database UUID (DB2: defaults to CF_D1_DATABASE_ID) | — |
+| `CF_SUMMARY_API_TOKEN` | Optional | Cloudflare API Token for DB2 (defaults to CF_API_TOKEN) | — |
+| `SUMMARY_WORKER_URL` | Optional | URL of deployed Summary Worker (e.g., https://movie-summaries-api.workers.dev) | — |
+| `SUMMARY_API_KEY` | Optional | Shared secret key between Primary Worker and Summary Worker | — |
 | `MAX_MOVIES_PER_SYNC` | No | Max movies to process in deep pipeline per run | `10` |
 | `MIN_POPULARITY` | No | Minimum TMDB popularity for deep review pipeline | `50.0` |
 | `RECENT_MONTHS` | No | How many months back to consider for deep review pipeline | `6` |
+
 
 ---
 
@@ -162,26 +189,38 @@ cp .env.example .env
 
 ### Database Setup (Cloudflare D1)
 
-1. **Install Wrangler & Login**:
-   ```bash
-   cd worker
-   npx wrangler login
-   ```
+#### 1. Setup DB1: Metadata Database (Account 1)
+```bash
+cd worker
+npx wrangler login
+npx wrangler d1 create movie-review-aggregator
+# Note database_id and update worker/wrangler.toml
 
-2. **Create D1 Database**:
-   ```bash
-   npx wrangler d1 create movie-review-aggregator
-   ```
-   Note the `database_id` output and update `worker/wrangler.toml`.
+# Apply Schema
+npx wrangler d1 execute movie-review-aggregator --local --file=schema.sql --yes
+npx wrangler d1 execute movie-review-aggregator --remote --file=schema.sql --yes
+```
 
-3. **Apply Schema**:
-   ```bash
-   # Local development database (.wrangler/)
-   npx wrangler d1 execute movie-review-aggregator --local --file=schema.sql --yes
+#### 2. Setup DB2: Summaries Database (Account 2)
+```bash
+cd ../worker-summaries
+npx wrangler login
+npx wrangler d1 create movie-summaries
+# Note database_id and update worker-summaries/wrangler.toml
 
-   # Remote Cloudflare D1 database
-   npx wrangler d1 execute movie-review-aggregator --remote --file=schema.sql --yes
-   ```
+# Apply Schema
+npx wrangler d1 execute movie-summaries --local --file=schema.sql --yes
+npx wrangler d1 execute movie-summaries --remote --file=schema.sql --yes
+```
+
+---
+
+### Migrating Existing Summaries (One-Time Utility)
+
+If you have existing summary data in DB1 and want to copy it over to DB2:
+```bash
+go run ./cmd/migrate_summaries
+```
 
 ---
 
@@ -192,31 +231,40 @@ cp .env.example .env
    go test -v ./...
    ```
 
-2. **Execute catalog crawler (full discovery & metadata backfill)**:
+2. **Execute catalog crawler (full discovery & metadata backfill to DB1)**:
    ```bash
    go run ./cmd/catalog --cursor=cursor.json --max-pages=5
    ```
 
-3. **Execute deep review & LLM pipeline manually**:
+3. **Execute deep review & LLM pipeline (writes metadata to DB1, summaries to DB2)**:
    ```bash
    go run ./cmd/pipeline
    ```
 
 ---
 
-### Running the Cloudflare Worker Locally
+### Running the Workers Locally
 
-```bash
-cd worker
-npm install
-npm run dev
-```
+1. **Start Summary Worker (Account 2 microservice)**:
+   ```bash
+   cd worker-summaries
+   npm install
+   npm run dev -- --port 8788
+   ```
+
+2. **Start Primary Worker (Account 1 API Gateway)**:
+   ```bash
+   cd ../worker
+   npm install
+   SUMMARY_WORKER_URL="http://localhost:8788" npm run dev -- --port 8787
+   ```
 
 Visit:
 * `http://localhost:8787/healthz`
 * `http://localhost:8787/api/v1/movies`
 * `http://localhost:8787/api/v1/movies/search?q=superman`
 * `http://localhost:8787/api/v1/movies/tmdb_12345`
+
 
 ---
 

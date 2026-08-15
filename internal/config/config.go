@@ -16,12 +16,15 @@ type Config struct {
 	LLMBaseURL         string
 	LLMAPIKey          string
 	LLMModel           string
-	CFAccountID        string
-	CFD1DatabaseID     string
-	CFAPIToken         string
-	MaxMoviesPerSync   int
-	MinPopularity      float64
-	RecentMonths       int
+	CFAccountID          string
+	CFD1DatabaseID       string
+	CFAPIToken           string
+	CFSummaryAccountID   string
+	CFSummaryDatabaseID  string
+	CFSummaryAPIToken    string
+	MaxMoviesPerSync     int
+	MinPopularity        float64
+	RecentMonths         int
 }
 
 func Load() (*Config, error) {
@@ -38,6 +41,10 @@ func Load() (*Config, error) {
 	cfAccountID := os.Getenv("CF_ACCOUNT_ID")
 	cfDatabaseID := os.Getenv("CF_D1_DATABASE_ID")
 	cfAPIToken := os.Getenv("CF_API_TOKEN")
+
+	cfSummaryAccountID := getEnv("CF_SUMMARY_ACCOUNT_ID", cfAccountID)
+	cfSummaryDatabaseID := getEnv("CF_SUMMARY_DATABASE_ID", cfDatabaseID)
+	cfSummaryAPIToken := getEnv("CF_SUMMARY_API_TOKEN", cfAPIToken)
 
 	maxMoviesStr := getEnv("MAX_MOVIES_PER_SYNC", "10")
 	maxMovies, err := strconv.Atoi(maxMoviesStr)
@@ -58,20 +65,23 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		TMDBAPIKey:         tmdbKey,
-		OMDBAPIKey:         omdbKey,
-		RedditClientID:     redditID,
-		RedditClientSecret: redditSecret,
-		RedditUserAgent:    redditUA,
-		LLMBaseURL:         llmBaseURL,
-		LLMAPIKey:          llmAPIKey,
-		LLMModel:           llmModel,
-		CFAccountID:        cfAccountID,
-		CFD1DatabaseID:     cfDatabaseID,
-		CFAPIToken:         cfAPIToken,
-		MaxMoviesPerSync:   maxMovies,
-		MinPopularity:      minPop,
-		RecentMonths:       recentMonths,
+		TMDBAPIKey:          tmdbKey,
+		OMDBAPIKey:          omdbKey,
+		RedditClientID:      redditID,
+		RedditClientSecret:  redditSecret,
+		RedditUserAgent:     redditUA,
+		LLMBaseURL:          llmBaseURL,
+		LLMAPIKey:           llmAPIKey,
+		LLMModel:            llmModel,
+		CFAccountID:          cfAccountID,
+		CFD1DatabaseID:       cfDatabaseID,
+		CFAPIToken:           cfAPIToken,
+		CFSummaryAccountID:  cfSummaryAccountID,
+		CFSummaryDatabaseID: cfSummaryDatabaseID,
+		CFSummaryAPIToken:   cfSummaryAPIToken,
+		MaxMoviesPerSync:    maxMovies,
+		MinPopularity:       minPop,
+		RecentMonths:        recentMonths,
 	}
 
 	return cfg, nil
