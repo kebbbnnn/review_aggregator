@@ -20,6 +20,26 @@ func TestDefaultCursor(t *testing.T) {
 	}
 }
 
+func TestNextSortStrategy(t *testing.T) {
+	tests := []struct {
+		current  string
+		expected string
+	}{
+		{"primary_release_date.desc", "popularity.desc"},
+		{"popularity.desc", "vote_count.desc"},
+		{"vote_count.desc", "revenue.desc"},
+		{"revenue.desc", "primary_release_date.desc"},
+		{"unknown.sort", "primary_release_date.desc"},
+	}
+
+	for _, tt := range tests {
+		res := NextSortStrategy(tt.current)
+		if res != tt.expected {
+			t.Errorf("NextSortStrategy(%q) expected %q, got %q", tt.current, tt.expected, res)
+		}
+	}
+}
+
 func TestLoadCursor_NonExistentFile(t *testing.T) {
 	c, err := LoadCursor("non_existent_cursor_file_12345.json")
 	if err != nil {
@@ -66,7 +86,7 @@ func TestSaveAndLoadCursor_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestLoadCursor_WrapAroundWhenCompleted(t *testing.T) {
+func TestLoadCursor_WrapAroundWhenCompletedOrMaxPages(t *testing.T) {
 	tmpDir := t.TempDir()
 	cursorPath := filepath.Join(tmpDir, "completed_cursor.json")
 
@@ -88,9 +108,12 @@ func TestLoadCursor_WrapAroundWhenCompleted(t *testing.T) {
 		t.Fatalf("LoadCursor failed: %v", err)
 	}
 
-	// Should reset for a new cycle
+	// Should reset for a new cycle with next sort strategy
 	if loaded.LastPage != 0 {
 		t.Errorf("expected LastPage 0 on wrap-around, got %d", loaded.LastPage)
+	}
+	if loaded.SortBy != "popularity.desc" {
+		t.Errorf("expected SortBy 'popularity.desc' on wrap-around, got %s", loaded.SortBy)
 	}
 	if loaded.MoviesCatalogedThisCycle != 0 {
 		t.Errorf("expected MoviesCatalogedThisCycle 0 on wrap-around, got %d", loaded.MoviesCatalogedThisCycle)

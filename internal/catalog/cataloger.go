@@ -86,6 +86,14 @@ func (c *Cataloger) Run(ctx context.Context) (*CatalogResult, error) {
 	}
 	log.Printf("[CATALOG] Loaded %d genre definitions from TMDB", len(genreMap))
 
+	// Ensure cursor is initialized and wrapped if already completed or reached TMDB page limit
+	if c.cursor.Completed || c.cursor.LastPage >= MaxTMDBPages {
+		c.cursor.SortBy = NextSortStrategy(c.cursor.SortBy)
+		c.cursor.LastPage = 0
+		c.cursor.MoviesCatalogedThisCycle = 0
+		c.cursor.Completed = false
+	}
+
 	startPage := c.cursor.LastPage + 1
 	currentPage := startPage
 
@@ -108,7 +116,14 @@ func (c *Cataloger) Run(ctx context.Context) (*CatalogResult, error) {
 			break
 		}
 
-		// 4. Fetch TMDB Page
+		// 4. Check TMDB hard ceiling (500 pages per discover query)
+		if currentPage > MaxTMDBPages {
+			log.Printf("[CATALOG] Reached TMDB max discover page limit (%d). Marking cycle completed.", MaxTMDBPages)
+			c.cursor.Completed = true
+			break
+		}
+
+		// 5. Fetch TMDB Page
 		movies, totalPages, err := c.tmdb.DiscoverAll(ctx, currentPage, c.cursor.SortBy)
 		if err != nil {
 			errMsg := fmt.Sprintf("Error fetching page %d: %v", currentPage, err)
@@ -118,17 +133,21 @@ func (c *Cataloger) Run(ctx context.Context) (*CatalogResult, error) {
 			break
 		}
 
-		c.cursor.TotalPages = totalPages
+		effectiveTotalPages := totalPages
+		if effectiveTotalPages > MaxTMDBPages {
+			effectiveTotalPages = MaxTMDBPages
+		}
+		c.cursor.TotalPages = effectiveTotalPages
 
-		if len(movies) == 0 || (totalPages > 0 && currentPage > totalPages) {
-			log.Printf("[CATALOG] Reached end of catalog at page %d (totalPages=%d). Marking completed.", currentPage, totalPages)
+		if len(movies) == 0 || (effectiveTotalPages > 0 && currentPage > effectiveTotalPages) {
+			log.Printf("[CATALOG] Reached end of catalog at page %d (totalPages=%d, effective=%d). Marking completed.", currentPage, totalPages, effectiveTotalPages)
 			c.cursor.Completed = true
 			break
 		}
 
 		result.MoviesDiscovered += len(movies)
 
-		// 5. Filter & Build Movie Documents
+		// 6. Filter & Build Movie Documents
 		var docsToSave []*store.MovieDocument
 		for _, m := range movies {
 			docID := discovery.FormatTMDBID(m.TMDBID)
@@ -166,7 +185,7 @@ func (c *Cataloger) Run(ctx context.Context) (*CatalogResult, error) {
 			docsToSave = append(docsToSave, doc)
 		}
 
-		// 6. Batch Save to D1
+		// 7. Batch Save to D1
 		if len(docsToSave) > 0 {
 			if err := c.store.SaveMovieBatch(ctx, docsToSave); err != nil {
 				errMsg := fmt.Sprintf("Error saving batch for page %d: %v", currentPage, err)
@@ -181,9 +200,9 @@ func (c *Cataloger) Run(ctx context.Context) (*CatalogResult, error) {
 		result.PagesProcessed++
 		c.cursor.LastPage = currentPage
 
-		// Check if this was the last page
-		if totalPages > 0 && currentPage >= totalPages {
-			log.Printf("[CATALOG] Processed final page %d of %d. Cycle complete!", currentPage, totalPages)
+		// Check if this was the last page (either end of TMDB pages or reached TMDB 500-page limit)
+		if (effectiveTotalPages > 0 && currentPage >= effectiveTotalPages) || currentPage >= MaxTMDBPages {
+			log.Printf("[CATALOG] Processed final page %d of %d (sort: %s). Cycle complete!", currentPage, effectiveTotalPages, c.cursor.SortBy)
 			c.cursor.Completed = true
 			if c.options.CursorPath != "" {
 				_ = SaveCursor(c.options.CursorPath, c.cursor)

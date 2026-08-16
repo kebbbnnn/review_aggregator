@@ -223,3 +223,83 @@ func TestCataloger_ContextCancellation(t *testing.T) {
 		t.Errorf("expected 0 pages processed, got %d", result.PagesProcessed)
 	}
 }
+
+func TestCataloger_TMDB500PageLimit(t *testing.T) {
+	// TMDB returns 48,000 totalPages, but API only supports up to page 500
+	tmdb := &mockTMDB{
+		genreMap:   map[int]string{28: "Action"},
+		totalPages: 48000,
+		pages: map[int][]discovery.Movie{
+			500: {{TMDBID: 500, Title: "Movie 500"}},
+		},
+	}
+
+	st := newMockCatalogStore()
+	cursor := &Cursor{LastPage: 499, TotalPages: 0, SortBy: "primary_release_date.desc"}
+	opts := CatalogOptions{
+		MaxDuration:    10 * time.Second,
+		MaxPages:       0,
+		RateLimitDelay: 1 * time.Millisecond,
+	}
+
+	cataloger := NewCataloger(tmdb, st, cursor, opts)
+	result, err := cataloger.Run(context.Background())
+	if err != nil {
+		t.Fatalf("cataloger.Run failed: %v", err)
+	}
+
+	if result.PagesProcessed != 1 {
+		t.Errorf("expected 1 page processed (page 500), got %d", result.PagesProcessed)
+	}
+	if !cursor.Completed {
+		t.Errorf("expected cursor to be marked completed at page 500")
+	}
+	if cursor.LastPage != 500 {
+		t.Errorf("expected LastPage 500, got %d", cursor.LastPage)
+	}
+	if cursor.TotalPages != 500 {
+		t.Errorf("expected TotalPages capped to 500, got %d", cursor.TotalPages)
+	}
+}
+
+func TestCataloger_ResumeAt500RotatesSortStrategy(t *testing.T) {
+	// If cursor was at page 500 from previous run, next Run should rotate sort strategy to popularity.desc and resume at page 1
+	tmdb := &mockTMDB{
+		genreMap:   map[int]string{28: "Action"},
+		totalPages: 10,
+		pages: map[int][]discovery.Movie{
+			1: {{TMDBID: 101, Title: "Movie 101"}},
+		},
+	}
+
+	st := newMockCatalogStore()
+	cursor := &Cursor{
+		LastPage:                 500,
+		TotalPages:               500,
+		SortBy:                   "primary_release_date.desc",
+		MoviesCatalogedThisCycle: 10000,
+		Completed:                true,
+	}
+	opts := CatalogOptions{
+		MaxDuration:    10 * time.Second,
+		MaxPages:       1,
+		RateLimitDelay: 1 * time.Millisecond,
+	}
+
+	cataloger := NewCataloger(tmdb, st, cursor, opts)
+	result, err := cataloger.Run(context.Background())
+	if err != nil {
+		t.Fatalf("cataloger.Run failed: %v", err)
+	}
+
+	if result.PagesProcessed != 1 {
+		t.Errorf("expected 1 page processed, got %d", result.PagesProcessed)
+	}
+	if cursor.SortBy != "popularity.desc" {
+		t.Errorf("expected SortBy to rotate to 'popularity.desc', got %s", cursor.SortBy)
+	}
+	if cursor.LastPage != 1 {
+		t.Errorf("expected LastPage 1, got %d", cursor.LastPage)
+	}
+}
+

@@ -29,9 +29,29 @@ func DefaultCursor() *Cursor {
 	}
 }
 
+const MaxTMDBPages = 500
+
+var DefaultSortStrategies = []string{
+	"primary_release_date.desc",
+	"popularity.desc",
+	"vote_count.desc",
+	"revenue.desc",
+}
+
+// NextSortStrategy returns the subsequent sort strategy in the rotation cycle.
+func NextSortStrategy(current string) string {
+	for i, s := range DefaultSortStrategies {
+		if s == current {
+			nextIdx := (i + 1) % len(DefaultSortStrategies)
+			return DefaultSortStrategies[nextIdx]
+		}
+	}
+	return DefaultSortStrategies[0]
+}
+
 // LoadCursor reads the cursor from the given file path.
 // If the file does not exist, it returns a DefaultCursor without error.
-// If the previous run completed, it resets to page 0 for a new cycle.
+// If the previous run completed or reached page limit, it rotates sort strategy and resets to page 0.
 func LoadCursor(path string) (*Cursor, error) {
 	if path == "" {
 		return DefaultCursor(), nil
@@ -54,8 +74,9 @@ func LoadCursor(path string) (*Cursor, error) {
 		cursor.SortBy = "primary_release_date.desc"
 	}
 
-	// Reset for wrap-around cycle if previous run finished entire catalog
-	if cursor.Completed {
+	// Reset for wrap-around cycle if previous run finished entire catalog or reached TMDB 500-page limit
+	if cursor.Completed || cursor.LastPage >= MaxTMDBPages {
+		cursor.SortBy = NextSortStrategy(cursor.SortBy)
 		cursor.LastPage = 0
 		cursor.MoviesCatalogedThisCycle = 0
 		cursor.Completed = false
