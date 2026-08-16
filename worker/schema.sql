@@ -19,6 +19,11 @@ CREATE TABLE IF NOT EXISTS movie_genres (
     PRIMARY KEY (movie_id, genre)
 );
 
+CREATE TABLE IF NOT EXISTS review_requests (
+    movie_id     TEXT PRIMARY KEY,
+    requested_at TEXT NOT NULL
+);
+
 -- Performance Indexes
 CREATE INDEX IF NOT EXISTS idx_movies_tmdb_id ON movies(tmdb_id);
 CREATE INDEX IF NOT EXISTS idx_movies_title ON movies(title);
@@ -26,4 +31,5 @@ CREATE INDEX IF NOT EXISTS idx_movies_imdb_score ON movies(imdb_score DESC);
 CREATE INDEX IF NOT EXISTS idx_movies_rotten_tomatoes ON movies(rotten_tomatoes DESC);
 CREATE INDEX IF NOT EXISTS idx_movies_last_updated ON movies(last_updated DESC);
 CREATE INDEX IF NOT EXISTS idx_movie_genres_genre ON movie_genres(genre);
+
 

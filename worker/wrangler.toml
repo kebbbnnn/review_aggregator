@@ -9,4 +9,6 @@ database_id = "ccb5ff55-c631-4b69-ac88-6e320fff4334"
 
 [vars]
 SUMMARY_WORKER_URL = "https://movie-summaries-api.hiimkevinladan.workers.dev"
+GITHUB_REPO = "kebbbnnn/review_aggregator"
+
 

@@ -2,6 +2,8 @@ export interface Env {
   DB: D1Database;
   SUMMARY_WORKER_URL?: string;
   SUMMARY_API_KEY?: string;
+  GITHUB_TOKEN?: string;
+  GITHUB_REPO?: string;
 }
 
 export interface MovieRow {

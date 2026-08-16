@@ -295,3 +295,83 @@ func TestOrchestrator_FreshnessCheckSkipsMovie(t *testing.T) {
 		t.Errorf("expected 0 processed movies, got %d", res.MoviesProcessed)
 	}
 }
+
+func TestOrchestrator_RunWithTarget_Success(t *testing.T) {
+	// Target movie in DB1 catalog
+	targetID := "tmdb_555"
+	targetMovie := &store.MovieDocument{
+		ID:          targetID,
+		TMDBID:      555,
+		Title:       "Targeted Movie",
+		ReleaseDate: time.Now(),
+		Overview:    "A targeted movie overview",
+	}
+
+	metaStore := newMockMetadataStore()
+	metaStore.movies[targetID] = targetMovie
+
+	sumStore := newMockSummaryStore()
+
+	// Additional discovered movie to fill batch
+	otherMovie := discovery.Movie{
+		TMDBID:      666,
+		Title:       "Batch Fill Movie",
+		ReleaseDate: time.Now(),
+	}
+
+	disc := &mockDiscoverer{movies: []discovery.Movie{otherMovie}}
+	coll := &mockCollector{reviews: []collector.Review{{ID: "r1", Content: "Great audience review!"}}}
+	llmCl := &mockLLMClient{
+		result: &llm.SummaryResponse{
+			OverallSentiment:  88,
+			AudienceConsensus: "Strong targeted summary",
+			Pros:              []string{"Pacing"},
+			Cons:              []string{"Ending"},
+			CommonThemes:      []string{"Cinema"},
+		},
+	}
+	proc := processor.NewProcessor(3, 30)
+
+	orc := pipeline.NewOrchestrator(disc, nil, []collector.Collector{coll}, proc, llmCl, metaStore, sumStore)
+
+	// Run on-demand for targetID with batch limit of 2
+	res, err := orc.RunWithTarget(context.Background(), targetID, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should process targeted movie + 1 additional movie from discovery
+	if res.MoviesProcessed != 2 {
+		t.Errorf("expected 2 processed movies (target + batch fill), got %d", res.MoviesProcessed)
+	}
+
+	// Verify target movie summary was saved to DB2
+	savedSum, found, _ := sumStore.GetSummary(context.Background(), targetID)
+	if !found || savedSum == nil {
+		t.Fatalf("expected summary for target movie %s in sumStore", targetID)
+	}
+	if savedSum.AudienceConsensus != "Strong targeted summary" {
+		t.Errorf("expected 'Strong targeted summary', got '%s'", savedSum.AudienceConsensus)
+	}
+}
+
+func TestOrchestrator_RunWithTarget_NotFound(t *testing.T) {
+	metaStore := newMockMetadataStore()
+	sumStore := newMockSummaryStore()
+	disc := &mockDiscoverer{}
+	coll := &mockCollector{}
+	llmCl := &mockLLMClient{}
+	proc := processor.NewProcessor(3, 30)
+
+	orc := pipeline.NewOrchestrator(disc, nil, []collector.Collector{coll}, proc, llmCl, metaStore, sumStore)
+
+	res, err := orc.RunWithTarget(context.Background(), "tmdb_nonexistent", 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(res.Errors) != 1 {
+		t.Errorf("expected 1 error for non-existent target, got %d", len(res.Errors))
+	}
+}
+

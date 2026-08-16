@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"time"
 
@@ -15,6 +16,9 @@ import (
 )
 
 func main() {
+	movieID := flag.String("movie-id", "", "Specific movie ID to process on-demand (e.g. tmdb_12345)")
+	flag.Parse()
+
 	log.Println("[INFO] Starting Movie Review Aggregator Pipeline (Dual DB Architecture)...")
 
 	cfg, err := config.Load()
@@ -56,7 +60,15 @@ func main() {
 
 	orchestrator := pipeline.NewOrchestrator(discoverer, omdb, collectors, proc, llmClient, metaStore, summaryStore)
 
-	result, err := orchestrator.Run(ctx, cfg.MaxMoviesPerSync)
+	var result *pipeline.SyncResult
+
+	if *movieID != "" {
+		log.Printf("[INFO] On-demand mode: targeting movie '%s' + batch fill", *movieID)
+		result, err = orchestrator.RunWithTarget(ctx, *movieID, cfg.MaxMoviesPerSync)
+	} else {
+		result, err = orchestrator.Run(ctx, cfg.MaxMoviesPerSync)
+	}
+
 	if err != nil {
 		log.Fatalf("[FATAL] Pipeline sync failed: %v", err)
 	}

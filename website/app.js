@@ -566,21 +566,95 @@ function renderDetail(movie) {
         </section>
       ` : `
         <!-- Unanalyzed State for Catalog Only Titles -->
-        <div class="empty-summary-card">
+        <div class="empty-summary-card" id="on-demand-card">
           <div class="empty-summary-icon">
             <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"></circle>
-              <polyline points="12 6 12 12 16 14"></polyline>
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
             </svg>
           </div>
-          <h3 class="empty-summary-title">Deep AI Review Summary Pending</h3>
+          <h3 class="empty-summary-title">No AI Review Analysis Yet</h3>
           <p class="empty-summary-desc">
-            This title has been cataloged from TMDB. The automated review harvester processes popular releases on schedule via GitHub Actions to collect Reddit &amp; Letterboxd sentiment.
+            This title has been cataloged from TMDB. You can trigger an on-demand deep audience review analysis powered by Reddit, Letterboxd, and our AI synthesis pipeline.
           </p>
+          <div class="on-demand-action-container" id="on-demand-action-container">
+            <button class="btn btn-primary" id="generate-review-btn" data-movie-id="${escapeHtml(movie.id)}">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+              </svg>
+              Generate AI Review
+            </button>
+          </div>
         </div>
       `}
     </div>
   `;
+
+  // Attach on-demand review request button handler if present
+  const generateBtn = document.getElementById('generate-review-btn');
+  const actionContainer = document.getElementById('on-demand-action-container');
+  if (generateBtn && actionContainer) {
+    generateBtn.addEventListener('click', async () => {
+      const movieId = generateBtn.getAttribute('data-movie-id');
+      generateBtn.disabled = true;
+      generateBtn.innerHTML = `
+        <svg class="spin-animation" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle>
+          <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"></path>
+        </svg>
+        Queuing Analysis...
+      `;
+
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/movies/${encodeURIComponent(movieId)}/request-review`, {
+          method: 'POST',
+        });
+        const data = await res.json().catch(() => ({}));
+
+        if (res.status === 202) {
+          actionContainer.innerHTML = `
+            <div class="queued-status-box success">
+              <div class="queued-status-icon">✓</div>
+              <div class="queued-status-content">
+                <strong>Analysis Queued Successfully!</strong>
+                <p>GitHub Actions review processing has been triggered. Please check back or refresh this page in a few minutes.</p>
+              </div>
+            </div>
+          `;
+        } else if (res.status === 429) {
+          const hours = data.retry_after_hours || 6;
+          actionContainer.innerHTML = `
+            <div class="queued-status-box cooldown">
+              <div class="queued-status-icon">⏳</div>
+              <div class="queued-status-content">
+                <strong>Analysis Already In Progress</strong>
+                <p>A review was recently requested for this movie. Next request available in ~${hours} hours.</p>
+              </div>
+            </div>
+          `;
+        } else {
+          actionContainer.innerHTML = `
+            <div class="queued-status-box error">
+              <div class="queued-status-icon">⚠️</div>
+              <div class="queued-status-content">
+                <strong>Unable to Queue Review</strong>
+                <p>${escapeHtml(data.error || 'Server error occurred. Please try again later.')}</p>
+              </div>
+            </div>
+          `;
+        }
+      } catch (err) {
+        actionContainer.innerHTML = `
+          <div class="queued-status-box error">
+            <div class="queued-status-icon">⚠️</div>
+            <div class="queued-status-content">
+              <strong>Network Error</strong>
+              <p>Failed to communicate with the review service.</p>
+            </div>
+          </div>
+        `;
+      }
+    });
+  }
 }
 
 /* ==========================================================================

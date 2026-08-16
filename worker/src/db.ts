@@ -135,3 +135,42 @@ async function populateGenres(db: D1Database, movies: MovieRow[]): Promise<Movie
     buildMovieMetadataResponse(m, genresByMovie.get(m.id) || [])
   );
 }
+
+// --- Review Request Cooldown ---
+
+export interface ReviewRequestRow {
+  movie_id: string;
+  requested_at: string;
+}
+
+export async function getReviewRequest(
+  db: D1Database,
+  movieId: string
+): Promise<ReviewRequestRow | null> {
+  const row = await db
+    .prepare('SELECT movie_id, requested_at FROM review_requests WHERE movie_id = ? LIMIT 1')
+    .bind(movieId)
+    .first<ReviewRequestRow>();
+  return row || null;
+}
+
+export async function upsertReviewRequest(
+  db: D1Database,
+  movieId: string
+): Promise<void> {
+  await db
+    .prepare('INSERT OR REPLACE INTO review_requests (movie_id, requested_at) VALUES (?, ?)')
+    .bind(movieId, new Date().toISOString())
+    .run();
+}
+
+export async function movieExistsInCatalog(
+  db: D1Database,
+  movieId: string
+): Promise<boolean> {
+  const row = await db
+    .prepare('SELECT 1 FROM movies WHERE id = ? LIMIT 1')
+    .bind(movieId)
+    .first();
+  return row !== null;
+}

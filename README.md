@@ -317,12 +317,13 @@ Visit:
 
 ## 🌐 API Endpoints (Cloudflare Worker)
 
-| Method | Endpoint | Description | Query Parameters |
+| Method | Endpoint | Description | Query Parameters / Body |
 |---|---|---|---|
 | `GET` | `/healthz` | Health check endpoint | — |
 | `GET` | `/api/v1/movies/search` | Search movies by title | `q` (required), `limit` (default: 10, max: 50) |
 | `GET` | `/api/v1/movies/:id` | Get full movie summary by ID | — |
 | `GET` | `/api/v1/movies` | Browse & filter movies | `genre`, `sort` (`release_date`, `imdb_score`, `rotten_tomatoes`, `overall_sentiment`, `last_updated`), `order` (`asc`/`desc`), `limit`, `offset` |
+| `POST` | `/api/v1/movies/:id/request-review` | Trigger on-demand AI review processing (6h cooldown per movie) | — |
 
 ---
 
@@ -352,21 +353,36 @@ Add the following secrets:
 ---
 
 ### Step 2: Workflows
-
-The repository includes two automated workflows:
-
+ 
+The repository includes three automated workflows:
+ 
 #### 1. Catalog Movie Sync (`.github/workflows/catalog_sync.yml`)
 - **Schedule**: Every 2 hours (`cron: '30 */2 * * *'`)
 - **Action**: Crawls TMDB's full movie catalog, saves metadata + genres to D1 in batches, and persists its progress across runs via GitHub Actions artifact cursors.
-
+ 
 #### 2. Scheduled Movie Review Sync (`.github/workflows/scheduled_sync.yml`)
 - **Schedule**: Every 6 hours (`cron: '0 */6 * * *'`)
-- **Action**: Discovers popular recent movies, gathers Reddit + Letterboxd reviews, generates LLM summaries, and writes detailed sentiment scores and pros/cons to D1.
+- **Action**: Discovers popular recent movies (popularity ≥ 20), gathers Reddit + Letterboxd reviews, generates LLM summaries, and writes detailed sentiment scores and pros/cons to DB2.
 
-#### Manual Trigger (On Demand)
+#### 3. On-Demand Movie Review (`.github/workflows/on_demand_review.yml`)
+- **Trigger**: Triggered via `workflow_dispatch` when a user clicks **"Generate AI Review"** on the website for any cataloged movie.
+- **Action**: Runs `go run ./cmd/pipeline --movie-id=<id>`, prioritizing the requested movie first, then batching up to N other unreviewed movies.
+
+#### Configuring On-Demand Reviews for the Primary Worker:
+To enable the Primary Worker to trigger on-demand GitHub Actions workflows:
+1. Generate a GitHub Personal Access Token (PAT) with `repo` or `actions:write` scope.
+2. Set the secret on the Primary Worker:
+   ```bash
+   cd worker
+   npx wrangler secret put GITHUB_TOKEN
+   # Paste your GitHub PAT when prompted
+   ```
+
+#### Manual Trigger (On Demand via GitHub UI)
 1. Go to the **Actions** tab on your GitHub repository.
-2. Select either **"Catalog Movie Sync"** or **"Scheduled Movie Review Sync"**.
+2. Select any workflow (**"Catalog Movie Sync"**, **"Scheduled Movie Review Sync"**, or **"On-Demand Movie Review"**).
 3. Click the **Run workflow** dropdown on the right and select `Branch: main`.
+
 
 ---
 
