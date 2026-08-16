@@ -17,6 +17,7 @@ type MovieDocument struct {
 	PosterURL      string    `json:"poster_url,omitempty"`
 	Overview       string    `json:"overview,omitempty"`
 	Genres         []string  `json:"genres,omitempty"`
+	Popularity     *float64  `json:"popularity,omitempty"`
 	IMDbScore      *float64  `json:"imdb_score,omitempty"`
 	RottenTomatoes *int      `json:"rotten_tomatoes,omitempty"`
 	LastUpdated    time.Time `json:"last_updated"`

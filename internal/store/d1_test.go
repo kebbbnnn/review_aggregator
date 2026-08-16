@@ -108,6 +108,7 @@ func TestD1Store_SaveAndGetMovie(t *testing.T) {
 							"release_date":    "2025-07-11T00:00:00Z",
 							"poster_url":      "https://example.com/poster.jpg",
 							"overview":        "Test overview",
+							"popularity":      float64(45.5),
 							"imdb_score":      float64(8.2),
 							"rotten_tomatoes": float64(88),
 							"last_updated":    "2026-08-10T12:00:00Z",
@@ -143,6 +144,7 @@ func TestD1Store_SaveAndGetMovie(t *testing.T) {
 		PosterURL:      "https://example.com/poster.jpg",
 		Overview:       "Test overview",
 		Genres:         []string{"Action", "Sci-Fi"},
+		Popularity:     ptrFloat(45.5),
 		IMDbScore:      ptrFloat(8.2),
 		RottenTomatoes: ptrInt(88),
 	}
@@ -171,6 +173,9 @@ func TestD1Store_SaveAndGetMovie(t *testing.T) {
 	}
 	if len(gotDoc.Genres) != 2 || gotDoc.Genres[0] != "Action" {
 		t.Errorf("Expected genres [Action, Sci-Fi], got %v", gotDoc.Genres)
+	}
+	if gotDoc.Popularity == nil || *gotDoc.Popularity != 45.5 {
+		t.Errorf("Expected Popularity 45.5, got %v", gotDoc.Popularity)
 	}
 	if gotDoc.IMDbScore == nil || *gotDoc.IMDbScore != 8.2 {
 		t.Errorf("Expected IMDbScore 8.2, got %v", gotDoc.IMDbScore)

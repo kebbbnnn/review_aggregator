@@ -221,6 +221,7 @@ function renderCatalog(data) {
           <label for="sort-select" class="sort-label">Sort By</label>
           <select id="sort-select" class="sort-select">
             <option value="overall_sentiment" ${state.sort === 'overall_sentiment' ? 'selected' : ''}>Top Sentiment (AI)</option>
+            <option value="popularity" ${state.sort === 'popularity' ? 'selected' : ''}>Most Popular (TMDB)</option>
             <option value="release_date" ${state.sort === 'release_date' ? 'selected' : ''}>Release Date</option>
             <option value="imdb_score" ${state.sort === 'imdb_score' ? 'selected' : ''}>IMDb Score</option>
             <option value="rotten_tomatoes" ${state.sort === 'rotten_tomatoes' ? 'selected' : ''}>Rotten Tomatoes</option>

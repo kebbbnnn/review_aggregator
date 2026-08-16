@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS movies (
     release_date      TEXT NOT NULL,       -- ISO 8601 string (e.g. 2025-07-11T00:00:00Z)
     poster_url        TEXT,
     overview          TEXT,
+    popularity        REAL DEFAULT 0.0,
     imdb_score        REAL,               -- Numeric (e.g. 7.8)
     rotten_tomatoes   INTEGER,            -- Percentage integer (e.g. 84)
     last_updated      TEXT NOT NULL        -- ISO 8601 string
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS review_requests (
 -- Performance Indexes
 CREATE INDEX IF NOT EXISTS idx_movies_tmdb_id ON movies(tmdb_id);
 CREATE INDEX IF NOT EXISTS idx_movies_title ON movies(title);
+CREATE INDEX IF NOT EXISTS idx_movies_popularity ON movies(popularity DESC);
 CREATE INDEX IF NOT EXISTS idx_movies_imdb_score ON movies(imdb_score DESC);
 CREATE INDEX IF NOT EXISTS idx_movies_rotten_tomatoes ON movies(rotten_tomatoes DESC);
 CREATE INDEX IF NOT EXISTS idx_movies_last_updated ON movies(last_updated DESC);

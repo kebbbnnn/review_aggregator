@@ -170,6 +170,7 @@ func (c *Cataloger) Run(ctx context.Context) (*CatalogResult, error) {
 				}
 			}
 
+			pop := m.Popularity
 			doc := &store.MovieDocument{
 				ID:          docID,
 				TMDBID:      m.TMDBID,
@@ -179,6 +180,7 @@ func (c *Cataloger) Run(ctx context.Context) (*CatalogResult, error) {
 				PosterURL:   m.PosterURL,
 				Overview:    m.Overview,
 				Genres:      genres,
+				Popularity:  &pop,
 				LastUpdated: time.Now().UTC(),
 			}
 

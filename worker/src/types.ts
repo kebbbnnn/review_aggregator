@@ -14,6 +14,7 @@ export interface MovieRow {
   release_date: string;
   poster_url: string | null;
   overview: string | null;
+  popularity: number | null;
   imdb_score: number | null;
   rotten_tomatoes: number | null;
   last_updated: string;
@@ -47,6 +48,7 @@ export interface MovieResponse {
   poster_url?: string;
   overview?: string;
   genres?: string[];
+  popularity?: number;
   scores: MovieScores;
   summary?: MovieSummary;
   review_count_analyzed: number;
@@ -55,7 +57,7 @@ export interface MovieResponse {
 
 export interface ListMoviesOptions {
   genre?: string;
-  sort?: 'release_date' | 'imdb_score' | 'rotten_tomatoes' | 'last_updated';
+  sort?: 'popularity' | 'release_date' | 'imdb_score' | 'rotten_tomatoes' | 'last_updated';
   order?: 'asc' | 'desc';
   limit?: number;
   offset?: number;

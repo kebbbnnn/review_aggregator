@@ -103,8 +103,8 @@ func (s *D1Store) SaveMovie(ctx context.Context, doc *MovieDocument) error {
 	// 2. Insert or replace movie row
 	upsertSQL := `INSERT INTO movies (
 		id, tmdb_id, imdb_id, title, release_date, poster_url, overview,
-		imdb_score, rotten_tomatoes, last_updated
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		popularity, imdb_score, rotten_tomatoes, last_updated
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		tmdb_id=excluded.tmdb_id,
 		imdb_id=excluded.imdb_id,
@@ -112,6 +112,7 @@ func (s *D1Store) SaveMovie(ctx context.Context, doc *MovieDocument) error {
 		release_date=excluded.release_date,
 		poster_url=excluded.poster_url,
 		overview=excluded.overview,
+		popularity=excluded.popularity,
 		imdb_score=excluded.imdb_score,
 		rotten_tomatoes=excluded.rotten_tomatoes,
 		last_updated=excluded.last_updated;`
@@ -126,6 +127,7 @@ func (s *D1Store) SaveMovie(ctx context.Context, doc *MovieDocument) error {
 			releaseDateStr,
 			doc.PosterURL,
 			doc.Overview,
+			doc.Popularity,
 			doc.IMDbScore,
 			doc.RottenTomatoes,
 			lastUpdatedStr,
@@ -168,8 +170,8 @@ func (s *D1Store) SaveMovieBatch(ctx context.Context, docs []*MovieDocument) err
 
 	upsertSQL := `INSERT INTO movies (
 		id, tmdb_id, imdb_id, title, release_date, poster_url, overview,
-		imdb_score, rotten_tomatoes, last_updated
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		popularity, imdb_score, rotten_tomatoes, last_updated
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		tmdb_id=excluded.tmdb_id,
 		imdb_id=excluded.imdb_id,
@@ -177,6 +179,7 @@ func (s *D1Store) SaveMovieBatch(ctx context.Context, docs []*MovieDocument) err
 		release_date=excluded.release_date,
 		poster_url=excluded.poster_url,
 		overview=excluded.overview,
+		popularity=excluded.popularity,
 		imdb_score=excluded.imdb_score,
 		rotten_tomatoes=excluded.rotten_tomatoes,
 		last_updated=excluded.last_updated;`
@@ -206,6 +209,7 @@ func (s *D1Store) SaveMovieBatch(ctx context.Context, docs []*MovieDocument) err
 				releaseDateStr,
 				doc.PosterURL,
 				doc.Overview,
+				doc.Popularity,
 				doc.IMDbScore,
 				doc.RottenTomatoes,
 				lastUpdatedStr,
@@ -271,7 +275,7 @@ func (s *D1Store) GetMovie(ctx context.Context, id string) (*MovieDocument, bool
 
 	batch := []d1QueryItem{
 		{
-			SQL:    "SELECT id, tmdb_id, imdb_id, title, release_date, poster_url, overview, imdb_score, rotten_tomatoes, last_updated FROM movies WHERE id = ? LIMIT 1;",
+			SQL:    "SELECT id, tmdb_id, imdb_id, title, release_date, poster_url, overview, popularity, imdb_score, rotten_tomatoes, last_updated FROM movies WHERE id = ? LIMIT 1;",
 			Params: []any{id},
 		},
 		{
@@ -554,6 +558,9 @@ func parseMovieRow(row map[string]any) *MovieDocument {
 	}
 	if v, ok := row["overview"].(string); ok {
 		doc.Overview = v
+	}
+	if v, ok := row["popularity"].(float64); ok {
+		doc.Popularity = &v
 	}
 	if v, ok := row["imdb_score"].(float64); ok {
 		doc.IMDbScore = &v

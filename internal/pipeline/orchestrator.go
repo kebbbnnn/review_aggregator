@@ -219,6 +219,7 @@ func (o *Orchestrator) processMovie(ctx context.Context, movie discovery.Movie, 
 		}
 	}
 
+	pop := movie.Popularity
 	doc := &store.MovieDocument{
 		ID:             movieID,
 		TMDBID:         movie.TMDBID,
@@ -228,6 +229,7 @@ func (o *Orchestrator) processMovie(ctx context.Context, movie discovery.Movie, 
 		PosterURL:      movie.PosterURL,
 		Overview:       movie.Overview,
 		Genres:         movie.Genres,
+		Popularity:     &pop,
 		IMDbScore:      store.ParseIMDbScore(movie.Scores.IMDb),
 		RottenTomatoes: store.ParseRottenTomatoesScore(movie.Scores.RottenTomatoes),
 		LastUpdated:    time.Now().UTC(),

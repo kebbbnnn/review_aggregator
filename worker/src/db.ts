@@ -22,6 +22,7 @@ export function buildMovieMetadataResponse(
   if (movie.imdb_id) res.imdb_id = movie.imdb_id;
   if (movie.poster_url) res.poster_url = movie.poster_url;
   if (movie.overview) res.overview = movie.overview;
+  if (movie.popularity !== null && movie.popularity !== undefined) res.popularity = movie.popularity;
   if (genres.length > 0) res.genres = genres;
 
   if (movie.imdb_score !== null && movie.imdb_score !== undefined) {
@@ -73,6 +74,7 @@ export async function listMovies(
   const offset = Math.max(options.offset || 0, 0);
 
   const allowedSorts = [
+    'popularity',
     'release_date',
     'imdb_score',
     'rotten_tomatoes',
