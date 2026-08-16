@@ -9,7 +9,7 @@ A lightweight **Cloudflare Worker** serves consumer-facing read APIs globally at
 ## 🌟 Key Features
 
 * **Continuous Full-Catalog Movie Discovery**: Crawls TMDB's full movie database (~900,000+ movies) with a dedicated stateful catalog pipeline that resumes across GitHub Actions runs using artifact cursors.
-* **Smart Deep Processing**: Selectively triggers review collection and LLM summarization for popular recent releases (popularity ≥ 50, released in last 6 months).
+* **Smart Deep Processing**: Selectively triggers review collection and LLM summarization for popular recent releases (popularity ≥ 20, released in last 6 months).
 * **Multi-Source Review Collection**: Concurrently gathers audience posts and reviews using Reddit's OAuth2 API (`r/movies`) and Letterboxd public RSS feeds (`golang.org/x/sync/errgroup`).
 * **Smart Preprocessing**: Cleans URLs, filters out short/junk comments, deduplicates repetitive text blocks, and ranks top reviews to optimize LLM token usage.
 * **Flexible LLM Provider Support**: Generic HTTP client using the standard OpenAI `/v1/chat/completions` API schema — zero code changes to switch between Google Gemini, Groq, OpenRouter, or local models.
@@ -167,7 +167,7 @@ cp .env.example .env
 | `SUMMARY_WORKER_URL` | Optional | URL of deployed Summary Worker (e.g., https://movie-summaries-api.workers.dev) | — |
 | `SUMMARY_API_KEY` | Optional | Shared secret key between Primary Worker and Summary Worker | — |
 | `MAX_MOVIES_PER_SYNC` | No | Max movies to process in deep pipeline per run | `10` |
-| `MIN_POPULARITY` | No | Minimum TMDB popularity for deep review pipeline | `50.0` |
+| `MIN_POPULARITY` | No | Minimum TMDB popularity for deep review pipeline | `20.0` |
 | `RECENT_MONTHS` | No | How many months back to consider for deep review pipeline | `6` |
 
 
@@ -221,6 +221,53 @@ If you have existing summary data in DB1 and want to copy it over to DB2:
 ```bash
 go run ./cmd/migrate_summaries
 ```
+
+---
+
+### 🔍 Querying & Managing Dual Databases via CLI (Wrangler)
+
+The database schema is partitioned across two separate Cloudflare accounts:
+
+| Database | Account | Location | Tables |
+|---|---|---|---|
+| **DB1** (`movie-review-aggregator`) | **Account 1** | `worker/` | `movies`, `movie_genres` |
+| **DB2** (`movie-summaries`) | **Account 2** | `worker-summaries/` | `movie_summaries`, `movie_points`, `movie_themes` |
+
+#### 1. Querying DB1 (Account 1: Metadata & Catalog)
+If your Wrangler session is logged in with Account 1:
+```bash
+cd worker
+
+# Count total catalog movies in DB1
+npx wrangler d1 execute movie-review-aggregator --remote --command="SELECT COUNT(*) as total_movies FROM movies;"
+
+# Search recent movies in DB1
+npx wrangler d1 execute movie-review-aggregator --remote --command="SELECT id, title, release_date FROM movies ORDER BY release_date DESC LIMIT 5;"
+```
+
+#### 2. Querying DB2 (Account 2: LLM Summaries, Points & Themes)
+Because Wrangler CLI defaults to your active browser login, query Account 2 without logging out by passing Account 2's token and account ID via environment variables:
+
+```bash
+cd worker-summaries
+
+# Count total movie points (pros & cons) in DB2
+CLOUDFLARE_API_TOKEN="<CF_SUMMARY_API_TOKEN>" CLOUDFLARE_ACCOUNT_ID="<CF_SUMMARY_ACCOUNT_ID>" \
+  npx wrangler d1 execute movie-summaries --remote --command="SELECT COUNT(*) as total_points FROM movie_points;"
+
+# Breakdown of points by type (pro vs con) in DB2
+CLOUDFLARE_API_TOKEN="<CF_SUMMARY_API_TOKEN>" CLOUDFLARE_ACCOUNT_ID="<CF_SUMMARY_ACCOUNT_ID>" \
+  npx wrangler d1 execute movie-summaries --remote --command="SELECT type, COUNT(*) as count FROM movie_points GROUP BY type;"
+
+# Count total summarized movies in DB2
+CLOUDFLARE_API_TOKEN="<CF_SUMMARY_API_TOKEN>" CLOUDFLARE_ACCOUNT_ID="<CF_SUMMARY_ACCOUNT_ID>" \
+  npx wrangler d1 execute movie-summaries --remote --command="SELECT COUNT(*) as total_summaries FROM movie_summaries;"
+
+# Inspect sample summary in DB2
+CLOUDFLARE_API_TOKEN="<CF_SUMMARY_API_TOKEN>" CLOUDFLARE_ACCOUNT_ID="<CF_SUMMARY_ACCOUNT_ID>" \
+  npx wrangler d1 execute movie-summaries --remote --command="SELECT movie_id, overall_sentiment, audience_consensus FROM movie_summaries LIMIT 3;"
+```
+
 
 ---
 

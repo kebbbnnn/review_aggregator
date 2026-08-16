@@ -52,10 +52,10 @@ func Load() (*Config, error) {
 		maxMovies = 10
 	}
 
-	minPopStr := getEnv("MIN_POPULARITY", "50.0")
+	minPopStr := getEnv("MIN_POPULARITY", "20.0")
 	minPop, err := strconv.ParseFloat(minPopStr, 64)
 	if err != nil {
-		minPop = 50.0
+		minPop = 20.0
 	}
 
 	recentMonthsStr := getEnv("RECENT_MONTHS", "6")
