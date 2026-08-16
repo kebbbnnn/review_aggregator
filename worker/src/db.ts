@@ -83,13 +83,26 @@ export async function listMovies(
 
   let countSql = 'SELECT COUNT(DISTINCT m.id) as count FROM movies m';
   let selectSql = `SELECT DISTINCT m.* FROM movies m`;
+  const whereClauses: string[] = [];
   const params: any[] = [];
 
   if (options.genre) {
-    const joinClause = ' INNER JOIN movie_genres g ON m.id = g.movie_id WHERE g.genre = ?';
+    const joinClause = ' INNER JOIN movie_genres g ON m.id = g.movie_id';
     countSql += joinClause;
     selectSql += joinClause;
+    whereClauses.push('g.genre = ?');
     params.push(options.genre);
+  }
+
+  // Exclude unreleased / future movies and missing release dates when sorting by release date
+  if (sortCol === 'release_date') {
+    whereClauses.push("m.release_date != '' AND m.release_date <= datetime('now')");
+  }
+
+  if (whereClauses.length > 0) {
+    const whereStr = ` WHERE ${whereClauses.join(' AND ')}`;
+    countSql += whereStr;
+    selectSql += whereStr;
   }
 
   selectSql += ` ORDER BY m.${sortCol} ${sortOrder} LIMIT ? OFFSET ?`;
