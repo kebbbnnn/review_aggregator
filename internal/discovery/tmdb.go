@@ -69,54 +69,77 @@ func (c *TMDBClient) DiscoverRecentMovies(ctx context.Context, limit int) ([]Mov
 		return nil, fmt.Errorf("TMDB API key not configured")
 	}
 
-	endpoint := fmt.Sprintf("%s/movie/now_playing?api_key=%s&language=en-US&page=1", c.baseURL, url.QueryEscape(c.apiKey))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating TMDB request: %w", err)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("executing TMDB request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("TMDB API returned status %d", resp.StatusCode)
-	}
-
-	var nowPlaying tmdbNowPlayingResponse
-	if err := json.NewDecoder(resp.Body).Decode(&nowPlaying); err != nil {
-		return nil, fmt.Errorf("decoding TMDB response: %w", err)
+	if limit <= 0 {
+		limit = 20
 	}
 
 	var movies []Movie
-	for i, item := range nowPlaying.Results {
-		if limit > 0 && i >= limit {
+	page := 1
+	maxPages := (limit + 19) / 20
+	if maxPages > 5 {
+		maxPages = 5
+	}
+
+	for page <= maxPages {
+		endpoint := fmt.Sprintf("%s/movie/now_playing?api_key=%s&language=en-US&page=%d", c.baseURL, url.QueryEscape(c.apiKey), page)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, fmt.Errorf("creating TMDB request: %w", err)
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("executing TMDB request: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("TMDB API returned status %d", resp.StatusCode)
+		}
+
+		var nowPlaying tmdbNowPlayingResponse
+		if err := json.NewDecoder(resp.Body).Decode(&nowPlaying); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("decoding TMDB response: %w", err)
+		}
+		resp.Body.Close()
+
+		if len(nowPlaying.Results) == 0 {
 			break
 		}
 
-		relDate, _ := time.Parse("2006-01-02", item.ReleaseDate)
-		posterURL := ""
-		if item.PosterPath != "" {
-			posterURL = "https://image.tmdb.org/t/p/w500" + item.PosterPath
+		for _, item := range nowPlaying.Results {
+			if len(movies) >= limit {
+				break
+			}
+
+			relDate, _ := time.Parse("2006-01-02", item.ReleaseDate)
+			posterURL := ""
+			if item.PosterPath != "" {
+				posterURL = "https://image.tmdb.org/t/p/w500" + item.PosterPath
+			}
+
+			m := Movie{
+				TMDBID:      item.ID,
+				Title:       item.Title,
+				ReleaseDate: relDate,
+				PosterURL:   posterURL,
+				Overview:    item.Overview,
+			}
+
+			// Enrich with IMDb ID if possible
+			if imdbID, genres, err := c.fetchDetails(ctx, item.ID); err == nil {
+				m.IMDbID = imdbID
+				m.Genres = genres
+			}
+
+			movies = append(movies, m)
 		}
 
-		m := Movie{
-			TMDBID:      item.ID,
-			Title:       item.Title,
-			ReleaseDate: relDate,
-			PosterURL:   posterURL,
-			Overview:    item.Overview,
+		if len(movies) >= limit {
+			break
 		}
-
-		// Enrich with IMDb ID if possible
-		if imdbID, genres, err := c.fetchDetails(ctx, item.ID); err == nil {
-			m.IMDbID = imdbID
-			m.Genres = genres
-		}
-
-		movies = append(movies, m)
+		page++
 	}
 
 	return movies, nil
@@ -219,7 +242,7 @@ func (c *TMDBClient) FetchGenreMap(ctx context.Context) (map[int]string, error) 
 	return genreMap, nil
 }
 
-func (c *TMDBClient) DiscoverAll(ctx context.Context, page int, sortBy string) ([]Movie, int, error) {
+func (c *TMDBClient) DiscoverCatalog(ctx context.Context, page int, sortBy string, year int) ([]Movie, int, error) {
 	if c.apiKey == "" {
 		return nil, 0, fmt.Errorf("TMDB API key not configured")
 	}
@@ -228,10 +251,18 @@ func (c *TMDBClient) DiscoverAll(ctx context.Context, page int, sortBy string) (
 		page = 1
 	}
 	if sortBy == "" {
-		sortBy = "primary_release_date.desc"
+		sortBy = "popularity.desc"
 	}
 
-	endpoint := fmt.Sprintf("%s/discover/movie?api_key=%s&language=en-US&sort_by=%s&page=%d", c.baseURL, url.QueryEscape(c.apiKey), url.QueryEscape(sortBy), page)
+	var endpoint string
+	if year > 0 {
+		endpoint = fmt.Sprintf("%s/discover/movie?api_key=%s&language=en-US&sort_by=%s&page=%d&primary_release_year=%d",
+			c.baseURL, url.QueryEscape(c.apiKey), url.QueryEscape(sortBy), page, year)
+	} else {
+		endpoint = fmt.Sprintf("%s/discover/movie?api_key=%s&language=en-US&sort_by=%s&page=%d",
+			c.baseURL, url.QueryEscape(c.apiKey), url.QueryEscape(sortBy), page)
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("creating TMDB discover request: %w", err)
@@ -276,6 +307,10 @@ func (c *TMDBClient) DiscoverAll(ctx context.Context, page int, sortBy string) (
 	return movies, discoverResp.TotalPages, nil
 }
 
+func (c *TMDBClient) DiscoverAll(ctx context.Context, page int, sortBy string) ([]Movie, int, error) {
+	return c.DiscoverCatalog(ctx, page, sortBy, 0)
+}
+
 func (c *TMDBClient) DiscoverPopularRecent(ctx context.Context, minPopularity float64, releasedAfter time.Time, limit int) ([]Movie, error) {
 	if c.apiKey == "" {
 		return nil, fmt.Errorf("TMDB API key not configured")
@@ -286,62 +321,93 @@ func (c *TMDBClient) DiscoverPopularRecent(ctx context.Context, minPopularity fl
 		dateStr = releasedAfter.Format("2006-01-02")
 	}
 
-	endpoint := fmt.Sprintf("%s/discover/movie?api_key=%s&language=en-US&sort_by=popularity.desc&popularity.gte=%.2f&primary_release_date.gte=%s&page=1",
-		c.baseURL,
-		url.QueryEscape(c.apiKey),
-		minPopularity,
-		url.QueryEscape(dateStr),
-	)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating TMDB popular/recent request: %w", err)
+	if limit <= 0 {
+		limit = 10
 	}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("executing TMDB popular/recent request: %w", err)
+	// Fetch a candidate pool across multiple pages so the orchestrator has enough
+	// unprocessed movies to fill its target limit even if top items are already cached.
+	targetCandidates := limit * 5
+	if targetCandidates < 40 {
+		targetCandidates = 40
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("TMDB API returned status %d", resp.StatusCode)
-	}
-
-	var discoverResp tmdbDiscoverResponse
-	if err := json.NewDecoder(resp.Body).Decode(&discoverResp); err != nil {
-		return nil, fmt.Errorf("decoding TMDB popular/recent response: %w", err)
+	if targetCandidates > 100 {
+		targetCandidates = 100
 	}
 
 	var movies []Movie
-	for i, item := range discoverResp.Results {
-		if limit > 0 && i >= limit {
+	page := 1
+	maxPages := 5
+
+	for page <= maxPages {
+		endpoint := fmt.Sprintf("%s/discover/movie?api_key=%s&language=en-US&sort_by=popularity.desc&popularity.gte=%.2f&primary_release_date.gte=%s&page=%d",
+			c.baseURL,
+			url.QueryEscape(c.apiKey),
+			minPopularity,
+			url.QueryEscape(dateStr),
+			page,
+		)
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, fmt.Errorf("creating TMDB popular/recent request: %w", err)
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("executing TMDB popular/recent request: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("TMDB API returned status %d", resp.StatusCode)
+		}
+
+		var discoverResp tmdbDiscoverResponse
+		if err := json.NewDecoder(resp.Body).Decode(&discoverResp); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("decoding TMDB popular/recent response: %w", err)
+		}
+		resp.Body.Close()
+
+		if len(discoverResp.Results) == 0 {
 			break
 		}
 
-		relDate, _ := time.Parse("2006-01-02", item.ReleaseDate)
-		posterURL := ""
-		if item.PosterPath != "" {
-			posterURL = "https://image.tmdb.org/t/p/w500" + item.PosterPath
+		for _, item := range discoverResp.Results {
+			if len(movies) >= targetCandidates {
+				break
+			}
+
+			relDate, _ := time.Parse("2006-01-02", item.ReleaseDate)
+			posterURL := ""
+			if item.PosterPath != "" {
+				posterURL = "https://image.tmdb.org/t/p/w500" + item.PosterPath
+			}
+
+			m := Movie{
+				TMDBID:      item.ID,
+				Title:       item.Title,
+				ReleaseDate: relDate,
+				PosterURL:   posterURL,
+				Overview:    item.Overview,
+				Popularity:  item.Popularity,
+				GenreIDs:    item.GenreIDs,
+			}
+
+			// Enrich with IMDb ID and Genre names for deep processing
+			if imdbID, genres, err := c.fetchDetails(ctx, item.ID); err == nil {
+				m.IMDbID = imdbID
+				m.Genres = genres
+			}
+
+			movies = append(movies, m)
 		}
 
-		m := Movie{
-			TMDBID:      item.ID,
-			Title:       item.Title,
-			ReleaseDate: relDate,
-			PosterURL:   posterURL,
-			Overview:    item.Overview,
-			Popularity:  item.Popularity,
-			GenreIDs:    item.GenreIDs,
+		if len(movies) >= targetCandidates || page >= discoverResp.TotalPages {
+			break
 		}
-
-		// Enrich with IMDb ID and Genre names for deep processing
-		if imdbID, genres, err := c.fetchDetails(ctx, item.ID); err == nil {
-			m.IMDbID = imdbID
-			m.Genres = genres
-		}
-
-		movies = append(movies, m)
+		page++
 	}
 
 	return movies, nil

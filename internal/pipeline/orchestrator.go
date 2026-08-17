@@ -66,6 +66,10 @@ func (o *Orchestrator) Run(ctx context.Context, limit int) (*SyncResult, error) 
 	}
 
 	for _, movie := range movies {
+		if limit > 0 && result.MoviesProcessed >= limit {
+			log.Printf("[PIPELINE] Reached target processing limit of %d movies. Stopping batch.", limit)
+			break
+		}
 		o.processMovie(ctx, movie, result, false)
 	}
 
@@ -118,6 +122,9 @@ func (o *Orchestrator) RunWithTarget(ctx context.Context, targetMovieID string, 
 		} else {
 			result.MoviesDiscovered += len(movies)
 			for _, movie := range movies {
+				if limit > 0 && result.MoviesProcessed >= limit {
+					break
+				}
 				movieID := discovery.FormatTMDBID(movie.TMDBID)
 				if movieID == targetMovieID {
 					continue // Skip if same as target

@@ -13,7 +13,7 @@ import (
 // TMDBDiscoverer defines the TMDB operations required by the cataloger.
 type TMDBDiscoverer interface {
 	FetchGenreMap(ctx context.Context) (map[int]string, error)
-	DiscoverAll(ctx context.Context, page int, sortBy string) ([]discovery.Movie, int, error)
+	DiscoverCatalog(ctx context.Context, page int, sortBy string, year int) ([]discovery.Movie, int, error)
 }
 
 // CatalogOptions allows customizing runtime behavior.
@@ -71,9 +71,35 @@ func NewCataloger(tmdb TMDBDiscoverer, store store.Store, cursor *Cursor, opts C
 	}
 }
 
-// Run executes the catalog synchronization loop.
+func (c *Cataloger) advanceYear() {
+	c.cursor.CurrentYear--
+	c.cursor.LastPage = 0
+	c.cursor.TotalPages = 0
+	if c.cursor.CurrentYear < MinCatalogYear {
+		log.Printf("[CATALOG] Reached oldest catalog year (%d). Full catalog crawl completed! Wrapping back to %d.",
+			MinCatalogYear, CurrentCatalogYear())
+		c.cursor.CurrentYear = CurrentCatalogYear()
+		c.cursor.Completed = true
+	}
+	if c.options.CursorPath != "" {
+		_ = SaveCursor(c.options.CursorPath, c.cursor)
+	}
+}
+
+// Run executes the catalog synchronization loop across years and pages.
 func (c *Cataloger) Run(ctx context.Context) (*CatalogResult, error) {
-	log.Printf("[CATALOG] Starting catalog sync (Resuming from page %d, sort: %s)...", c.cursor.LastPage, c.cursor.SortBy)
+	if c.cursor.CurrentYear == 0 {
+		c.cursor.CurrentYear = CurrentCatalogYear()
+	}
+	if c.cursor.Completed || c.cursor.CurrentYear < MinCatalogYear {
+		c.cursor.CurrentYear = CurrentCatalogYear()
+		c.cursor.LastPage = 0
+		c.cursor.MoviesCatalogedThisCycle = 0
+		c.cursor.Completed = false
+	}
+
+	log.Printf("[CATALOG] Starting catalog sync (Resuming year %d, page %d, sort: %s)...",
+		c.cursor.CurrentYear, c.cursor.LastPage, c.cursor.SortBy)
 	startTime := time.Now()
 
 	result := &CatalogResult{
@@ -85,17 +111,6 @@ func (c *Cataloger) Run(ctx context.Context) (*CatalogResult, error) {
 		return nil, fmt.Errorf("fetching genre map: %w", err)
 	}
 	log.Printf("[CATALOG] Loaded %d genre definitions from TMDB", len(genreMap))
-
-	// Ensure cursor is initialized and wrapped if already completed or reached TMDB page limit
-	if c.cursor.Completed || c.cursor.LastPage >= MaxTMDBPages {
-		c.cursor.SortBy = NextSortStrategy(c.cursor.SortBy)
-		c.cursor.LastPage = 0
-		c.cursor.MoviesCatalogedThisCycle = 0
-		c.cursor.Completed = false
-	}
-
-	startPage := c.cursor.LastPage + 1
-	currentPage := startPage
 
 	for {
 		// 1. Check Context Cancellation
@@ -116,17 +131,17 @@ func (c *Cataloger) Run(ctx context.Context) (*CatalogResult, error) {
 			break
 		}
 
-		// 4. Check TMDB hard ceiling (500 pages per discover query)
+		currentPage := c.cursor.LastPage + 1
 		if currentPage > MaxTMDBPages {
-			log.Printf("[CATALOG] Reached TMDB max discover page limit (%d). Marking cycle completed.", MaxTMDBPages)
-			c.cursor.Completed = true
-			break
+			log.Printf("[CATALOG] Year %d reached TMDB max discover page limit (%d). Advancing to previous year.", c.cursor.CurrentYear, MaxTMDBPages)
+			c.advanceYear()
+			continue
 		}
 
-		// 5. Fetch TMDB Page
-		movies, totalPages, err := c.tmdb.DiscoverAll(ctx, currentPage, c.cursor.SortBy)
+		// 4. Fetch TMDB Page for Current Year
+		movies, totalPages, err := c.tmdb.DiscoverCatalog(ctx, currentPage, c.cursor.SortBy, c.cursor.CurrentYear)
 		if err != nil {
-			errMsg := fmt.Sprintf("Error fetching page %d: %v", currentPage, err)
+			errMsg := fmt.Sprintf("Error fetching year %d page %d: %v", c.cursor.CurrentYear, currentPage, err)
 			log.Println("[ERROR]", errMsg)
 			result.Errors = append(result.Errors, errMsg)
 			// Break to allow saving cursor at last known successful state
@@ -140,14 +155,15 @@ func (c *Cataloger) Run(ctx context.Context) (*CatalogResult, error) {
 		c.cursor.TotalPages = effectiveTotalPages
 
 		if len(movies) == 0 || (effectiveTotalPages > 0 && currentPage > effectiveTotalPages) {
-			log.Printf("[CATALOG] Reached end of catalog at page %d (totalPages=%d, effective=%d). Marking completed.", currentPage, totalPages, effectiveTotalPages)
-			c.cursor.Completed = true
-			break
+			log.Printf("[CATALOG] Reached end of catalog for year %d at page %d (totalPages=%d, effective=%d). Advancing to previous year.",
+				c.cursor.CurrentYear, currentPage, totalPages, effectiveTotalPages)
+			c.advanceYear()
+			continue
 		}
 
 		result.MoviesDiscovered += len(movies)
 
-		// 6. Filter & Build Movie Documents
+		// 5. Filter & Build Movie Documents
 		var docsToSave []*store.MovieDocument
 		for _, m := range movies {
 			docID := discovery.FormatTMDBID(m.TMDBID)
@@ -187,10 +203,10 @@ func (c *Cataloger) Run(ctx context.Context) (*CatalogResult, error) {
 			docsToSave = append(docsToSave, doc)
 		}
 
-		// 7. Batch Save to D1
+		// 6. Batch Save to D1
 		if len(docsToSave) > 0 {
 			if err := c.store.SaveMovieBatch(ctx, docsToSave); err != nil {
-				errMsg := fmt.Sprintf("Error saving batch for page %d: %v", currentPage, err)
+				errMsg := fmt.Sprintf("Error saving batch for year %d page %d: %v", c.cursor.CurrentYear, currentPage, err)
 				log.Println("[ERROR]", errMsg)
 				result.Errors = append(result.Errors, errMsg)
 				break
@@ -202,28 +218,23 @@ func (c *Cataloger) Run(ctx context.Context) (*CatalogResult, error) {
 		result.PagesProcessed++
 		c.cursor.LastPage = currentPage
 
-		// Check if this was the last page (either end of TMDB pages or reached TMDB 500-page limit)
+		// Check if this was the last page for this year
 		if (effectiveTotalPages > 0 && currentPage >= effectiveTotalPages) || currentPage >= MaxTMDBPages {
-			log.Printf("[CATALOG] Processed final page %d of %d (sort: %s). Cycle complete!", currentPage, effectiveTotalPages, c.cursor.SortBy)
-			c.cursor.Completed = true
-			if c.options.CursorPath != "" {
-				_ = SaveCursor(c.options.CursorPath, c.cursor)
-			}
-			break
+			log.Printf("[CATALOG] Processed final page %d of %d for year %d (saved %d new movies). Advancing year.",
+				currentPage, effectiveTotalPages, c.cursor.CurrentYear, len(docsToSave))
+			c.advanceYear()
 		}
 
 		// Progress Log every 10 pages
 		if result.PagesProcessed%10 == 0 {
-			log.Printf("[CATALOG] Progress: page %d/%d (Processed: %d, Saved: %d, Skipped: %d, Elapsed: %v)",
-				currentPage, totalPages, result.PagesProcessed, result.MoviesSaved, result.MoviesSkipped, time.Since(startTime).Round(time.Second))
+			log.Printf("[CATALOG] Progress: year %d, page %d/%d (Processed: %d, Saved: %d, Skipped: %d, Elapsed: %v)",
+				c.cursor.CurrentYear, c.cursor.LastPage, c.cursor.TotalPages, result.PagesProcessed, result.MoviesSaved, result.MoviesSkipped, time.Since(startTime).Round(time.Second))
 		}
 
 		// Auto-save cursor after every page
 		if c.options.CursorPath != "" {
 			_ = SaveCursor(c.options.CursorPath, c.cursor)
 		}
-
-		currentPage++
 
 		// 7. Rate Limiting Delay
 		if c.options.RateLimitDelay > 0 {
@@ -245,3 +256,4 @@ func (c *Cataloger) Run(ctx context.Context) (*CatalogResult, error) {
 
 	return result, nil
 }
+

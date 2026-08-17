@@ -119,6 +119,58 @@ func TestFetchGenreMap_Success(t *testing.T) {
 	}
 }
 
+func TestDiscoverCatalog_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/discover/movie" {
+			page := r.URL.Query().Get("page")
+			sortBy := r.URL.Query().Get("sort_by")
+			year := r.URL.Query().Get("primary_release_year")
+			if page != "1" || sortBy != "popularity.desc" || year != "1994" {
+				t.Errorf("unexpected query params: page=%s, sort_by=%s, year=%s", page, sortBy, year)
+			}
+
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"page": 1,
+				"total_pages": 45,
+				"total_results": 900,
+				"results": [
+					{
+						"id": 278,
+						"title": "The Shawshank Redemption",
+						"release_date": "1994-09-23",
+						"poster_path": "/shawshank.jpg",
+						"overview": "Framed in the 1940s for the double murder...",
+						"genre_ids": [18, 80],
+						"popularity": 140.0
+					}
+				]
+			}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewTMDBClient("test_key")
+	client.baseURL = server.URL
+
+	movies, totalPages, err := client.DiscoverCatalog(context.Background(), 1, "popularity.desc", 1994)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if totalPages != 45 {
+		t.Errorf("expected totalPages 45, got %d", totalPages)
+	}
+	if len(movies) != 1 {
+		t.Fatalf("expected 1 movie, got %d", len(movies))
+	}
+	if movies[0].TMDBID != 278 || movies[0].Title != "The Shawshank Redemption" {
+		t.Errorf("unexpected movie: %+v", movies[0])
+	}
+}
+
 func TestDiscoverAll_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/discover/movie" {
@@ -201,7 +253,7 @@ func TestDiscoverPopularRecent_Success(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{
 				"page": 1,
-				"total_pages": 10,
+				"total_pages": 1,
 				"results": [
 					{
 						"id": 201,
@@ -246,4 +298,5 @@ func TestDiscoverPopularRecent_Success(t *testing.T) {
 		t.Errorf("unexpected movie details: %+v", movies[0])
 	}
 }
+
 

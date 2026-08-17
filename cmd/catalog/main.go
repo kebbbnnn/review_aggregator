@@ -67,7 +67,7 @@ func main() {
 		log.Fatalf("[FATAL] Catalog sync failed: %v", err)
 	}
 
-	log.Printf("[INFO] Catalog sync run complete: %d pages, %d discovered, %d saved, %d skipped, %d errors. Cursor now at page %d (completed=%v)",
+	log.Printf("[INFO] Catalog sync run complete: %d pages, %d discovered, %d saved, %d skipped, %d errors. Cursor now at year %d, page %d (completed=%v)",
 		result.PagesProcessed, result.MoviesDiscovered, result.MoviesSaved, result.MoviesSkipped, len(result.Errors),
-		result.Cursor.LastPage, result.Cursor.Completed)
+		result.Cursor.CurrentYear, result.Cursor.LastPage, result.Cursor.Completed)
 }

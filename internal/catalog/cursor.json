@@ -1,8 +1,9 @@
 {
   "last_page": 0,
   "total_pages": 0,
-  "sort_by": "primary_release_date.desc",
+  "sort_by": "popularity.desc",
+  "current_year": 2026,
   "movies_cataloged_this_cycle": 0,
   "completed": false,
-  "last_run": "2026-08-16T11:22:48.610201Z"
+  "last_run": "2026-08-17T08:34:13.410187Z"
 }

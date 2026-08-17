@@ -12,31 +12,14 @@ func TestDefaultCursor(t *testing.T) {
 	if c.LastPage != 0 {
 		t.Errorf("expected LastPage 0, got %d", c.LastPage)
 	}
-	if c.SortBy != "primary_release_date.desc" {
-		t.Errorf("expected SortBy 'primary_release_date.desc', got %s", c.SortBy)
+	if c.SortBy != "popularity.desc" {
+		t.Errorf("expected SortBy 'popularity.desc', got %s", c.SortBy)
+	}
+	if c.CurrentYear != CurrentCatalogYear() {
+		t.Errorf("expected CurrentYear %d, got %d", CurrentCatalogYear(), c.CurrentYear)
 	}
 	if c.Completed {
 		t.Errorf("expected Completed false")
-	}
-}
-
-func TestNextSortStrategy(t *testing.T) {
-	tests := []struct {
-		current  string
-		expected string
-	}{
-		{"primary_release_date.desc", "popularity.desc"},
-		{"popularity.desc", "vote_count.desc"},
-		{"vote_count.desc", "revenue.desc"},
-		{"revenue.desc", "primary_release_date.desc"},
-		{"unknown.sort", "primary_release_date.desc"},
-	}
-
-	for _, tt := range tests {
-		res := NextSortStrategy(tt.current)
-		if res != tt.expected {
-			t.Errorf("NextSortStrategy(%q) expected %q, got %q", tt.current, tt.expected, res)
-		}
 	}
 }
 
@@ -48,6 +31,9 @@ func TestLoadCursor_NonExistentFile(t *testing.T) {
 	if c.LastPage != 0 {
 		t.Errorf("expected LastPage 0, got %d", c.LastPage)
 	}
+	if c.CurrentYear != CurrentCatalogYear() {
+		t.Errorf("expected CurrentYear %d, got %d", CurrentCatalogYear(), c.CurrentYear)
+	}
 }
 
 func TestSaveAndLoadCursor_RoundTrip(t *testing.T) {
@@ -57,7 +43,8 @@ func TestSaveAndLoadCursor_RoundTrip(t *testing.T) {
 	initial := &Cursor{
 		LastPage:                 42,
 		TotalPages:               500,
-		SortBy:                   "primary_release_date.desc",
+		SortBy:                   "popularity.desc",
+		CurrentYear:              2024,
 		MoviesCatalogedThisCycle: 840,
 		Completed:                false,
 		LastRun:                  time.Now().UTC().Truncate(time.Second),
@@ -75,6 +62,9 @@ func TestSaveAndLoadCursor_RoundTrip(t *testing.T) {
 	if loaded.LastPage != 42 {
 		t.Errorf("expected LastPage 42, got %d", loaded.LastPage)
 	}
+	if loaded.CurrentYear != 2024 {
+		t.Errorf("expected CurrentYear 2024, got %d", loaded.CurrentYear)
+	}
 	if loaded.TotalPages != 500 {
 		t.Errorf("expected TotalPages 500, got %d", loaded.TotalPages)
 	}
@@ -86,6 +76,40 @@ func TestSaveAndLoadCursor_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestLoadCursor_LegacyCursorMigration(t *testing.T) {
+	tmpDir := t.TempDir()
+	cursorPath := filepath.Join(tmpDir, "legacy_cursor.json")
+
+	// Legacy cursor from old system without current_year
+	legacyData := []byte(`{
+		"last_page": 500,
+		"total_pages": 500,
+		"sort_by": "revenue.desc",
+		"movies_cataloged_this_cycle": 9999,
+		"completed": true,
+		"last_run": "2026-08-17T06:05:38Z"
+	}`)
+	if err := os.WriteFile(cursorPath, legacyData, 0644); err != nil {
+		t.Fatalf("writing legacy cursor failed: %v", err)
+	}
+
+	loaded, err := LoadCursor(cursorPath)
+	if err != nil {
+		t.Fatalf("LoadCursor failed: %v", err)
+	}
+
+	// Should migrate to CurrentCatalogYear() at page 0
+	if loaded.CurrentYear != CurrentCatalogYear() {
+		t.Errorf("expected CurrentYear %d on legacy migration, got %d", CurrentCatalogYear(), loaded.CurrentYear)
+	}
+	if loaded.LastPage != 0 {
+		t.Errorf("expected LastPage 0 on legacy migration, got %d", loaded.LastPage)
+	}
+	if loaded.Completed {
+		t.Errorf("expected Completed false on legacy migration, got true")
+	}
+}
+
 func TestLoadCursor_WrapAroundWhenCompletedOrMaxPages(t *testing.T) {
 	tmpDir := t.TempDir()
 	cursorPath := filepath.Join(tmpDir, "completed_cursor.json")
@@ -93,9 +117,10 @@ func TestLoadCursor_WrapAroundWhenCompletedOrMaxPages(t *testing.T) {
 	completedCursor := &Cursor{
 		LastPage:                 500,
 		TotalPages:               500,
-		SortBy:                   "primary_release_date.desc",
+		SortBy:                   "popularity.desc",
+		CurrentYear:              2020,
 		MoviesCatalogedThisCycle: 10000,
-		Completed:                true,
+		Completed:                false,
 		LastRun:                  time.Now().UTC(),
 	}
 
@@ -108,18 +133,12 @@ func TestLoadCursor_WrapAroundWhenCompletedOrMaxPages(t *testing.T) {
 		t.Fatalf("LoadCursor failed: %v", err)
 	}
 
-	// Should reset for a new cycle with next sort strategy
+	// Because LastPage was 500, LoadCursor advances to previous year (2019) at page 0
+	if loaded.CurrentYear != 2019 {
+		t.Errorf("expected CurrentYear 2019 on page limit advance, got %d", loaded.CurrentYear)
+	}
 	if loaded.LastPage != 0 {
-		t.Errorf("expected LastPage 0 on wrap-around, got %d", loaded.LastPage)
-	}
-	if loaded.SortBy != "popularity.desc" {
-		t.Errorf("expected SortBy 'popularity.desc' on wrap-around, got %s", loaded.SortBy)
-	}
-	if loaded.MoviesCatalogedThisCycle != 0 {
-		t.Errorf("expected MoviesCatalogedThisCycle 0 on wrap-around, got %d", loaded.MoviesCatalogedThisCycle)
-	}
-	if loaded.Completed {
-		t.Errorf("expected Completed false on wrap-around, got true")
+		t.Errorf("expected LastPage 0 on page limit advance, got %d", loaded.LastPage)
 	}
 }
 
@@ -152,3 +171,4 @@ func TestLoadCursor_InvalidJSON(t *testing.T) {
 		t.Fatalf("expected error for invalid json, got nil")
 	}
 }
+

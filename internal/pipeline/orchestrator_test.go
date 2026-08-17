@@ -375,3 +375,63 @@ func TestOrchestrator_RunWithTarget_NotFound(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_CandidatePool_SkipFreshAndProcessRemaining(t *testing.T) {
+	// 3 candidates discovered: first 2 are fresh with summaries, 3rd is new
+	movie1 := discovery.Movie{TMDBID: 101, Title: "Fresh Movie 1"}
+	movie2 := discovery.Movie{TMDBID: 102, Title: "Fresh Movie 2"}
+	movie3 := discovery.Movie{TMDBID: 103, Title: "New Movie 3"}
+
+	metaStore := newMockMetadataStore()
+	sumStore := newMockSummaryStore()
+
+	// Seed movie1 and movie2 as fresh (< 24h) with summaries
+	for _, id := range []string{"tmdb_101", "tmdb_102"} {
+		metaStore.movies[id] = &store.MovieDocument{
+			ID:          id,
+			LastUpdated: time.Now().Add(-1 * time.Hour),
+		}
+		sumStore.summaries[id] = &store.SummaryDocument{
+			MovieID:          id,
+			OverallSentiment: ptrInt(80),
+			LastUpdated:      time.Now().Add(-1 * time.Hour),
+		}
+	}
+
+	disc := &mockDiscoverer{movies: []discovery.Movie{movie1, movie2, movie3}}
+	coll := &mockCollector{reviews: []collector.Review{{ID: "r1", Content: "Good movie"}}}
+	llmCl := &mockLLMClient{
+		result: &llm.SummaryResponse{
+			OverallSentiment:  85,
+			AudienceConsensus: "Positive consensus",
+		},
+	}
+	proc := processor.NewProcessor(3, 30)
+
+	orc := pipeline.NewOrchestrator(disc, nil, []collector.Collector{coll}, proc, llmCl, metaStore, sumStore)
+
+	// Target processing limit of 1
+	res, err := orc.Run(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if res.MoviesDiscovered != 3 {
+		t.Errorf("expected 3 discovered candidates, got %d", res.MoviesDiscovered)
+	}
+	if res.MoviesSkipped != 2 {
+		t.Errorf("expected 2 skipped movies, got %d", res.MoviesSkipped)
+	}
+	if res.MoviesProcessed != 1 {
+		t.Errorf("expected 1 processed movie, got %d", res.MoviesProcessed)
+	}
+
+	// Verify movie 103 was processed and saved
+	if doc, ok := metaStore.movies["tmdb_103"]; !ok || doc == nil {
+		t.Errorf("expected tmdb_103 to be saved in metaStore")
+	}
+	if sum, ok := sumStore.summaries["tmdb_103"]; !ok || sum == nil {
+		t.Errorf("expected tmdb_103 to have summary saved in sumStore")
+	}
+}
+
+

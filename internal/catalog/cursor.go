@@ -7,51 +7,44 @@ import (
 	"time"
 )
 
-// Cursor tracks progress through the TMDB catalog.
+const (
+	MaxTMDBPages   = 500
+	MinCatalogYear = 1890
+)
+
+// CurrentCatalogYear returns the current calendar year in UTC.
+func CurrentCatalogYear() int {
+	return time.Now().UTC().Year()
+}
+
+// Cursor tracks progress through the TMDB catalog across release years and sort strategies.
 type Cursor struct {
 	LastPage                 int       `json:"last_page"`
 	TotalPages               int       `json:"total_pages"`
 	SortBy                   string    `json:"sort_by"`
+	CurrentYear              int       `json:"current_year,omitempty"`
 	MoviesCatalogedThisCycle int       `json:"movies_cataloged_this_cycle"`
 	Completed                bool      `json:"completed"`
 	LastRun                  time.Time `json:"last_run"`
 }
 
-// DefaultCursor returns an initialized cursor starting from page 0.
+// DefaultCursor returns an initialized cursor starting at the current year and page 0.
 func DefaultCursor() *Cursor {
 	return &Cursor{
 		LastPage:                 0,
 		TotalPages:               0,
-		SortBy:                   "primary_release_date.desc",
+		SortBy:                   "popularity.desc",
+		CurrentYear:              CurrentCatalogYear(),
 		MoviesCatalogedThisCycle: 0,
 		Completed:                false,
 		LastRun:                  time.Now().UTC(),
 	}
 }
 
-const MaxTMDBPages = 500
-
-var DefaultSortStrategies = []string{
-	"primary_release_date.desc",
-	"popularity.desc",
-	"vote_count.desc",
-	"revenue.desc",
-}
-
-// NextSortStrategy returns the subsequent sort strategy in the rotation cycle.
-func NextSortStrategy(current string) string {
-	for i, s := range DefaultSortStrategies {
-		if s == current {
-			nextIdx := (i + 1) % len(DefaultSortStrategies)
-			return DefaultSortStrategies[nextIdx]
-		}
-	}
-	return DefaultSortStrategies[0]
-}
-
 // LoadCursor reads the cursor from the given file path.
 // If the file does not exist, it returns a DefaultCursor without error.
-// If the previous run completed or reached page limit, it rotates sort strategy and resets to page 0.
+// If the previous run completed, it resets to CurrentCatalogYear() at page 0.
+// If the cursor is from a legacy run (no CurrentYear set), it initializes CurrentYear to CurrentCatalogYear().
 func LoadCursor(path string) (*Cursor, error) {
 	if path == "" {
 		return DefaultCursor(), nil
@@ -71,15 +64,33 @@ func LoadCursor(path string) (*Cursor, error) {
 	}
 
 	if cursor.SortBy == "" {
-		cursor.SortBy = "primary_release_date.desc"
+		cursor.SortBy = "popularity.desc"
 	}
 
-	// Reset for wrap-around cycle if previous run finished entire catalog or reached TMDB 500-page limit
-	if cursor.Completed || cursor.LastPage >= MaxTMDBPages {
-		cursor.SortBy = NextSortStrategy(cursor.SortBy)
+	// Legacy cursor migration: if no CurrentYear was recorded, initialize to CurrentCatalogYear()
+	if cursor.CurrentYear == 0 {
+		cursor.CurrentYear = CurrentCatalogYear()
+		cursor.LastPage = 0
+		cursor.Completed = false
+	}
+
+	// If previous run marked completion or reached year limit, reset for a new cycle
+	if cursor.Completed || cursor.CurrentYear < MinCatalogYear {
+		cursor.CurrentYear = CurrentCatalogYear()
 		cursor.LastPage = 0
 		cursor.MoviesCatalogedThisCycle = 0
 		cursor.Completed = false
+	}
+
+	// If LastPage >= MaxTMDBPages, advance to previous year
+	if cursor.LastPage >= MaxTMDBPages {
+		cursor.CurrentYear--
+		cursor.LastPage = 0
+		cursor.TotalPages = 0
+		if cursor.CurrentYear < MinCatalogYear {
+			cursor.CurrentYear = CurrentCatalogYear()
+			cursor.Completed = false
+		}
 	}
 
 	return &cursor, nil
@@ -103,3 +114,4 @@ func SaveCursor(path string, cursor *Cursor) error {
 
 	return nil
 }
+

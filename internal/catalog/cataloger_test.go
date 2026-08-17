@@ -14,9 +14,10 @@ import (
 type mockTMDB struct {
 	mu          sync.Mutex
 	genreMap    map[int]string
-	pages       map[int][]discovery.Movie
-	totalPages  int
+	pages       map[int]map[int][]discovery.Movie // year -> page -> movies
+	totalPages  map[int]int                       // year -> totalPages
 	calledPages []int
+	calledYears []int
 }
 
 func (m *mockTMDB) FetchGenreMap(ctx context.Context) (map[int]string, error) {
@@ -25,16 +26,28 @@ func (m *mockTMDB) FetchGenreMap(ctx context.Context) (map[int]string, error) {
 	return m.genreMap, nil
 }
 
-func (m *mockTMDB) DiscoverAll(ctx context.Context, page int, sortBy string) ([]discovery.Movie, int, error) {
+func (m *mockTMDB) DiscoverCatalog(ctx context.Context, page int, sortBy string, year int) ([]discovery.Movie, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calledPages = append(m.calledPages, page)
+	m.calledYears = append(m.calledYears, year)
 
-	movies, ok := m.pages[page]
-	if !ok {
-		return nil, m.totalPages, nil
+	total := 1
+	if m.totalPages != nil {
+		if t, ok := m.totalPages[year]; ok {
+			total = t
+		}
 	}
-	return movies, m.totalPages, nil
+
+	if m.pages != nil {
+		if yearPages, ok := m.pages[year]; ok {
+			if movies, ok := yearPages[page]; ok {
+				return movies, total, nil
+			}
+		}
+	}
+
+	return nil, total, nil
 }
 
 type mockCatalogStore struct {
@@ -86,19 +99,24 @@ func (s *mockCatalogStore) MovieExists(ctx context.Context, id string) (bool, er
 func (s *mockCatalogStore) Close() error { return nil }
 
 func TestCataloger_MultiPage_Success(t *testing.T) {
+	currentYear := 2026
 	tmdb := &mockTMDB{
-		genreMap:   map[int]string{28: "Action", 35: "Comedy"},
-		totalPages: 3,
-		pages: map[int][]discovery.Movie{
-			1: {
-				{TMDBID: 101, Title: "Movie 101", GenreIDs: []int{28}, ReleaseDate: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)},
-				{TMDBID: 102, Title: "Movie 102", GenreIDs: []int{35}, ReleaseDate: time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)},
-			},
-			2: {
-				{TMDBID: 103, Title: "Movie 103", GenreIDs: []int{28, 35}, ReleaseDate: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)},
-			},
-			3: {
-				{TMDBID: 104, Title: "Movie 104", GenreIDs: []int{28}, ReleaseDate: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)},
+		genreMap: map[int]string{28: "Action", 35: "Comedy"},
+		totalPages: map[int]int{
+			2026: 3,
+		},
+		pages: map[int]map[int][]discovery.Movie{
+			2026: {
+				1: {
+					{TMDBID: 101, Title: "Movie 101", GenreIDs: []int{28}, ReleaseDate: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)},
+					{TMDBID: 102, Title: "Movie 102", GenreIDs: []int{35}, ReleaseDate: time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)},
+				},
+				2: {
+					{TMDBID: 103, Title: "Movie 103", GenreIDs: []int{28, 35}, ReleaseDate: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)},
+				},
+				3: {
+					{TMDBID: 104, Title: "Movie 104", GenreIDs: []int{28}, ReleaseDate: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)},
+				},
 			},
 		},
 	}
@@ -110,10 +128,15 @@ func TestCataloger_MultiPage_Success(t *testing.T) {
 	tmpDir := t.TempDir()
 	cursorPath := filepath.Join(tmpDir, "cursor.json")
 
-	cursor := DefaultCursor()
+	cursor := &Cursor{
+		LastPage:    0,
+		TotalPages:  0,
+		SortBy:      "popularity.desc",
+		CurrentYear: currentYear,
+	}
 	opts := CatalogOptions{
 		MaxDuration:    10 * time.Second,
-		MaxPages:       0,
+		MaxPages:       3,
 		RateLimitDelay: 1 * time.Millisecond,
 		CursorPath:     cursorPath,
 	}
@@ -137,11 +160,12 @@ func TestCataloger_MultiPage_Success(t *testing.T) {
 	if result.MoviesSaved != 3 {
 		t.Errorf("expected 3 movies saved, got %d", result.MoviesSaved)
 	}
-	if !cursor.Completed {
-		t.Errorf("expected cursor to be marked completed")
+	// After finishing page 3 of 3 for 2026, it advances to 2025
+	if cursor.CurrentYear != 2025 {
+		t.Errorf("expected cursor CurrentYear 2025, got %d", cursor.CurrentYear)
 	}
-	if cursor.LastPage != 3 {
-		t.Errorf("expected cursor LastPage 3, got %d", cursor.LastPage)
+	if cursor.LastPage != 0 {
+		t.Errorf("expected cursor LastPage 0, got %d", cursor.LastPage)
 	}
 
 	// Verify genres mapped properly
@@ -152,31 +176,72 @@ func TestCataloger_MultiPage_Success(t *testing.T) {
 	if len(doc103.Genres) != 2 || doc103.Genres[0] != "Action" || doc103.Genres[1] != "Comedy" {
 		t.Errorf("expected genres [Action, Comedy], got %v", doc103.Genres)
 	}
+}
 
-	// Verify cursor was written to disk and resets on load due to Completed: true
-	diskCursor, err := LoadCursor(cursorPath)
-	if err != nil {
-		t.Fatalf("loading saved cursor failed: %v", err)
+func TestCataloger_YearTransition(t *testing.T) {
+	// Tests that when year 2024 finishes page 1 (only 1 page), it automatically advances to year 2023 in the same run
+	tmdb := &mockTMDB{
+		genreMap: map[int]string{28: "Action"},
+		totalPages: map[int]int{
+			2024: 1,
+			2023: 2,
+		},
+		pages: map[int]map[int][]discovery.Movie{
+			2024: {
+				1: {{TMDBID: 2401, Title: "2024 Movie"}},
+			},
+			2023: {
+				1: {{TMDBID: 2301, Title: "2023 Movie P1"}},
+				2: {{TMDBID: 2302, Title: "2023 Movie P2"}},
+			},
+		},
 	}
-	// Because Completed was true, LoadCursor resets LastPage to 0 for next cycle
-	if diskCursor.LastPage != 0 {
-		t.Errorf("expected loaded cursor LastPage 0 (wrap-around reset), got %d", diskCursor.LastPage)
+
+	st := newMockCatalogStore()
+	cursor := &Cursor{LastPage: 0, TotalPages: 0, SortBy: "popularity.desc", CurrentYear: 2024}
+	opts := CatalogOptions{
+		MaxDuration:    10 * time.Second,
+		MaxPages:       2, // Process 2 pages total (1 from 2024, 1 from 2023)
+		RateLimitDelay: 1 * time.Millisecond,
+	}
+
+	cataloger := NewCataloger(tmdb, st, cursor, opts)
+	result, err := cataloger.Run(context.Background())
+	if err != nil {
+		t.Fatalf("cataloger.Run failed: %v", err)
+	}
+
+	if result.PagesProcessed != 2 {
+		t.Errorf("expected 2 pages processed across years, got %d", result.PagesProcessed)
+	}
+	if result.MoviesSaved != 2 {
+		t.Errorf("expected 2 movies saved, got %d", result.MoviesSaved)
+	}
+	if cursor.CurrentYear != 2023 {
+		t.Errorf("expected cursor CurrentYear 2023, got %d", cursor.CurrentYear)
+	}
+	if cursor.LastPage != 1 {
+		t.Errorf("expected cursor LastPage 1 (in year 2023), got %d", cursor.LastPage)
 	}
 }
 
 func TestCataloger_MaxPagesLimit(t *testing.T) {
 	tmdb := &mockTMDB{
-		genreMap:   map[int]string{28: "Action"},
-		totalPages: 10,
-		pages: map[int][]discovery.Movie{
-			1: {{TMDBID: 101, Title: "Movie 101"}},
-			2: {{TMDBID: 102, Title: "Movie 102"}},
-			3: {{TMDBID: 103, Title: "Movie 103"}},
+		genreMap: map[int]string{28: "Action"},
+		totalPages: map[int]int{
+			2026: 10,
+		},
+		pages: map[int]map[int][]discovery.Movie{
+			2026: {
+				1: {{TMDBID: 101, Title: "Movie 101"}},
+				2: {{TMDBID: 102, Title: "Movie 102"}},
+				3: {{TMDBID: 103, Title: "Movie 103"}},
+			},
 		},
 	}
 
 	st := newMockCatalogStore()
-	cursor := &Cursor{LastPage: 0, TotalPages: 10, SortBy: "primary_release_date.desc"}
+	cursor := &Cursor{LastPage: 0, TotalPages: 10, SortBy: "popularity.desc", CurrentYear: 2026}
 	opts := CatalogOptions{
 		MaxDuration:    10 * time.Second,
 		MaxPages:       2, // Limit to 2 pages
@@ -203,10 +268,14 @@ func TestCataloger_MaxPagesLimit(t *testing.T) {
 
 func TestCataloger_ContextCancellation(t *testing.T) {
 	tmdb := &mockTMDB{
-		genreMap:   map[int]string{28: "Action"},
-		totalPages: 10,
-		pages: map[int][]discovery.Movie{
-			1: {{TMDBID: 101, Title: "Movie 101"}},
+		genreMap: map[int]string{28: "Action"},
+		totalPages: map[int]int{
+			2026: 10,
+		},
+		pages: map[int]map[int][]discovery.Movie{
+			2026: {
+				1: {{TMDBID: 101, Title: "Movie 101"}},
+			},
 		},
 	}
 
@@ -227,59 +296,19 @@ func TestCataloger_ContextCancellation(t *testing.T) {
 func TestCataloger_TMDB500PageLimit(t *testing.T) {
 	// TMDB returns 48,000 totalPages, but API only supports up to page 500
 	tmdb := &mockTMDB{
-		genreMap:   map[int]string{28: "Action"},
-		totalPages: 48000,
-		pages: map[int][]discovery.Movie{
-			500: {{TMDBID: 500, Title: "Movie 500"}},
+		genreMap: map[int]string{28: "Action"},
+		totalPages: map[int]int{
+			2024: 48000,
+		},
+		pages: map[int]map[int][]discovery.Movie{
+			2024: {
+				500: {{TMDBID: 500, Title: "Movie 500"}},
+			},
 		},
 	}
 
 	st := newMockCatalogStore()
-	cursor := &Cursor{LastPage: 499, TotalPages: 0, SortBy: "primary_release_date.desc"}
-	opts := CatalogOptions{
-		MaxDuration:    10 * time.Second,
-		MaxPages:       0,
-		RateLimitDelay: 1 * time.Millisecond,
-	}
-
-	cataloger := NewCataloger(tmdb, st, cursor, opts)
-	result, err := cataloger.Run(context.Background())
-	if err != nil {
-		t.Fatalf("cataloger.Run failed: %v", err)
-	}
-
-	if result.PagesProcessed != 1 {
-		t.Errorf("expected 1 page processed (page 500), got %d", result.PagesProcessed)
-	}
-	if !cursor.Completed {
-		t.Errorf("expected cursor to be marked completed at page 500")
-	}
-	if cursor.LastPage != 500 {
-		t.Errorf("expected LastPage 500, got %d", cursor.LastPage)
-	}
-	if cursor.TotalPages != 500 {
-		t.Errorf("expected TotalPages capped to 500, got %d", cursor.TotalPages)
-	}
-}
-
-func TestCataloger_ResumeAt500RotatesSortStrategy(t *testing.T) {
-	// If cursor was at page 500 from previous run, next Run should rotate sort strategy to popularity.desc and resume at page 1
-	tmdb := &mockTMDB{
-		genreMap:   map[int]string{28: "Action"},
-		totalPages: 10,
-		pages: map[int][]discovery.Movie{
-			1: {{TMDBID: 101, Title: "Movie 101"}},
-		},
-	}
-
-	st := newMockCatalogStore()
-	cursor := &Cursor{
-		LastPage:                 500,
-		TotalPages:               500,
-		SortBy:                   "primary_release_date.desc",
-		MoviesCatalogedThisCycle: 10000,
-		Completed:                true,
-	}
+	cursor := &Cursor{LastPage: 499, TotalPages: 0, SortBy: "popularity.desc", CurrentYear: 2024}
 	opts := CatalogOptions{
 		MaxDuration:    10 * time.Second,
 		MaxPages:       1,
@@ -293,13 +322,15 @@ func TestCataloger_ResumeAt500RotatesSortStrategy(t *testing.T) {
 	}
 
 	if result.PagesProcessed != 1 {
-		t.Errorf("expected 1 page processed, got %d", result.PagesProcessed)
+		t.Errorf("expected 1 page processed (page 500), got %d", result.PagesProcessed)
 	}
-	if cursor.SortBy != "popularity.desc" {
-		t.Errorf("expected SortBy to rotate to 'popularity.desc', got %s", cursor.SortBy)
+	// Reached 500 in 2024, should advance to 2023
+	if cursor.CurrentYear != 2023 {
+		t.Errorf("expected CurrentYear 2023 on 500-page limit, got %d", cursor.CurrentYear)
 	}
-	if cursor.LastPage != 1 {
-		t.Errorf("expected LastPage 1, got %d", cursor.LastPage)
+	if cursor.LastPage != 0 {
+		t.Errorf("expected LastPage 0 on year advance, got %d", cursor.LastPage)
 	}
 }
+
 
